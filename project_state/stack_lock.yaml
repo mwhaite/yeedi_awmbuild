@@ -1,0 +1,34 @@
+stack_lock:
+  runtime:
+    platform: "Home Assistant Core"
+    language: "Python"
+
+  home_assistant_min_version: "2025.1.0"
+
+  python_packages:
+    - name: aiohttp
+      rationale: "Async HTTP client used by Home Assistant."
+      version_policy: "Use Home Assistant pinned aiohttp via core requirements; do not pin separately unless required."
+    - name: async_timeout
+      rationale: "Timeout handling (often already in HA deps)."
+      version_policy: "Rely on HA core."
+    - name: voluptuous
+      rationale: "Config validation for options flow (HA standard)."
+      version_policy: "Rely on HA core."
+
+  integration_dependencies:
+    - homeassistant.helpers.update_coordinator.DataUpdateCoordinator
+    - homeassistant.config_entries.ConfigEntry
+    - homeassistant.components.vacuum
+
+  coding_standards:
+    - "Follow Home Assistant developer docs: async-first, type hints where helpful."
+    - "Use ruff and mypy only as dev tooling; do not require them at runtime."
+
+  external_inputs_required:
+    - "Node-RED forum flow/script for Yeedi: endpoints, headers, auth fields."
+    - "Optional: packet capture from Yeedi mobile app for validation (user-owned account)."
+
+  risk_notes:
+    - "Yeedi APIs may be region-specific; plan for base URL selection."
+    - "If Yeedi uses device certificates or app-specific signatures, MVP may require replicating those headers."

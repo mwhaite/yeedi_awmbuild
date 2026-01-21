@@ -1,0 +1,63 @@
+project:
+  name: homeassistant-yeedi
+  kind: home_assistant_integration
+  domain: yeedi
+  version: 0.1.0
+  summary: >-
+    Home Assistant custom integration for Yeedi robot vacuums.
+    Yeedi devices are similar to Ecovacs/Deebot vacuums, but the Yeedi
+    authentication flow and some API details differ from the built-in Deebot
+    integration.
+
+inputs:
+  task_input:
+    mode: plaintext
+    plaintext_description: |
+      create a homeassistant integration for the yeedi platform. while very
+      similar to other vacuums, the authentication details vary from the normal
+      deebot ones the built integration uses. there is a nodered project script
+      in the homeassistant forums that breaks out many of the configurations
+      needed.
+
+goals:
+  - Provide a Home Assistant integration (custom component) that connects to
+    Yeedi accounts, discovers devices, and exposes a Vacuum entity.
+  - Support Yeedi-specific authentication without requiring users to run
+    Node-RED.
+  - Be structured to allow future expansion (maps, zones, multi-floor, etc.).
+
+non_goals_initial:
+  - Cloudless/local control (unless Yeedi supports it and the Node-RED script
+    demonstrates it clearly).
+  - Perfect parity with the mobile app on day one.
+
+deliverables:
+  - A repository-ready Home Assistant custom component under
+    custom_components/yeedi.
+  - Config Flow UI for setup (email/username + password and required regional
+    options if applicable).
+  - Vacuum entity with common commands: start, pause, stop, return_to_base,
+    locate, fan_speed presets if available.
+  - Robust logging and a diagnostics entry that avoids leaking secrets.
+  - Basic tests and developer documentation.
+
+constraints:
+  - Use Home Assistant async patterns (aiohttp, DataUpdateCoordinator).
+  - No hard-coded secrets; store tokens in the config entry and use OAuth/token
+    refresh if the platform requires it.
+  - Keep the implementation compatible with current Home Assistant Python
+    versioning and linting expectations.
+  - Treat the Node-RED forum script as an input/reference that may be incomplete
+    or outdated; design for safe failure and clear error messages.
+
+assumptions:
+  - The Yeedi platform exposes an HTTPS API used by its mobile app.
+  - The Node-RED forum script contains working endpoint paths, headers, and
+    token/credential fields that can be ported to Python.
+  - A single account may have multiple devices.
+
+success_criteria:
+  - A user can add the integration via UI, authenticate successfully, and see
+    at least one Yeedi vacuum entity.
+  - Basic commands work reliably and state updates within a reasonable interval.
+  - Failures produce actionable logs without exposing credentials.

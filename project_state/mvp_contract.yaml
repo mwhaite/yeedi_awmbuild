@@ -1,0 +1,56 @@
+mvp_contract:
+  scope: "Yeedi Home Assistant Integration MVP"
+
+  must_have:
+    - config_flow:
+        description: "UI-based config flow for account authentication and device discovery."
+        acceptance:
+          - "User can enter credentials and complete setup without editing YAML."
+          - "Auth errors are surfaced as clear, localized messages."
+    - authentication:
+        description: "Implement Yeedi-specific login/token acquisition based on mobile-app API behavior."
+        acceptance:
+          - "Tokens (and refresh, if applicable) are persisted in ConfigEntry."
+          - "Re-auth flow works when tokens expire or are revoked."
+    - device_discovery:
+        description: "Discover Yeedi devices bound to the user account."
+        acceptance:
+          - "At least one device is created as a Vacuum entity when present on the account."
+    - vacuum_entity_core:
+        description: "Expose core vacuum controls and states."
+        acceptance:
+          - "start, pause, stop, return_to_base work."
+          - "battery and basic status are visible."
+          - "fan_speed presets supported when the API exposes them."
+    - polling_and_push_strategy:
+        description: "State updates via polling (initially), with upgrade path to push/websocket if feasible."
+        acceptance:
+          - "Coordinator updates do not block Home Assistant event loop."
+
+  should_have:
+    - locate
+    - error_and_edge_case_handling
+    - diagnostics_redaction
+    - basic unit tests for API client parsing
+
+  wont_have_yet:
+    - maps
+    - per-room cleaning
+    - no-go zones
+    - multi-map management
+    - firmware updates
+
+  release_artifacts:
+    - "custom_components/yeedi/*"
+    - "README.md with setup and troubleshooting"
+    - "HACS-compatible structure (optional but recommended)"
+
+  quality_bars:
+    reliability:
+      - "Transient network failures are retried with backoff."
+      - "Rate limiting is respected if detected."
+    security:
+      - "No credentials or raw tokens in logs."
+      - "Diagnostics remove tokens, device IDs if considered sensitive."
+    maintainability:
+      - "API client isolated behind a small interface; endpoint-specific details contained in one module."

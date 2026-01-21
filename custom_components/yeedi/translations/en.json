@@ -1,0 +1,30 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Yeedi",
+        "description": "Enter your Yeedi account credentials and optional region/base URL."
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate",
+        "description": "Authentication expired. Enter your credentials again."
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to Yeedi cloud.",
+      "invalid_auth": "Invalid credentials.",
+      "unknown": "Unexpected error."
+    },
+    "abort": {
+      "reauth_successful": "Reauthentication was successful."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Yeedi Options",
+        "description": "Adjust region, base URL, and polling interval."
+      }
+    }
+  }
+}

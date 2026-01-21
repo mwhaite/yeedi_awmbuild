@@ -1,0 +1,55 @@
+execution_shape:
+  repo_layout:
+    root:
+      - custom_components/yeedi/__init__.py
+      - custom_components/yeedi/manifest.json
+      - custom_components/yeedi/const.py
+      - custom_components/yeedi/config_flow.py
+      - custom_components/yeedi/coordinator.py
+      - custom_components/yeedi/api.py
+      - custom_components/yeedi/vacuum.py
+      - custom_components/yeedi/diagnostics.py
+      - custom_components/yeedi/translations/en.json
+      - README.md
+      - pyproject.toml (dev tooling)
+      - tests/ (optional at MVP)
+
+  architecture:
+    - "Config Flow collects credentials and any region/endpoint selector needed."
+    - "ApiClient (aiohttp) handles auth, request signing/headers, and endpoint calls."
+    - "DataUpdateCoordinator owns periodic refresh and per-device state caching."
+    - "VacuumEntity reads state from coordinator and issues commands via ApiClient."
+
+  data_model:
+    account:
+      fields:
+        - username_or_email
+        - region (optional)
+        - access_token
+        - refresh_token (optional)
+        - expires_at (optional)
+    device:
+      fields:
+        - device_id
+        - name
+        - model
+        - capabilities
+        - status
+        - battery
+        - fan_speed
+
+  observability:
+    logging:
+      - "Use Home Assistant logger; debug logs redact secrets."
+    diagnostics:
+      - "Implement async_get_config_entry_diagnostics with redaction."
+
+  test_strategy:
+    - "Unit tests: parse responses, redaction utilities, token refresh logic."
+    - "Manual test: add integration, confirm entity and commands."
+
+  milestones:
+    - M1: "Port Node-RED auth details into Python client; validate login."
+    - M2: "Discover devices; basic vacuum entity appears."
+    - M3: "Implement core commands; coordinator refresh stable."
+    - M4: "Polish: reauth, diagnostics, docs."
