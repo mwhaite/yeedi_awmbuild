@@ -3,10 +3,11 @@
   "name": "Yeedi",
   "version": "0.1.0",
   "config_flow": true,
-  "documentation": "https://github.com/your-org/homeassistant-yeedi",
-  "issue_tracker": "https://github.com/your-org/homeassistant-yeedi/issues",
+  "documentation": "https://github.com/Mark/yeedi_awmbuild",
+  "issue_tracker": "https://github.com/Mark/yeedi_awmbuild/issues",
+  "homeassistant": "2025.1.0",
   "requirements": [],
   "dependencies": [],
-  "codeowners": [],
+  "codeowners": ["@Mark"],
   "iot_class": "cloud_polling"
 }

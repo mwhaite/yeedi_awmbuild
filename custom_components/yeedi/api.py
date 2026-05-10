@@ -7,7 +7,7 @@ Do not add or change endpoints here without verifying the forum reference.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import async_timeout
@@ -163,7 +163,7 @@ class YeediApiClient:
                 response = await self._session.request(method, url, json=json, headers=headers)
                 response.raise_for_status()
                 return await response.json()
-        except Exception as err:  # noqa: BLE001 - HA expects broad handling for UpdateFailed
+        except Exception as err:
             raise YeediApiError(f"Yeedi API request failed: {err}") from err
 
     def _parse_auth_response(self, response: Any) -> AuthResult:
@@ -179,7 +179,7 @@ class YeediApiClient:
         expires_at = None
         expires_in = response.get("expires_in")
         if isinstance(expires_in, (int, float)):
-            expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
+            expires_at = datetime.now(UTC) + timedelta(seconds=int(expires_in))
         return AuthResult(access_token=access_token, refresh_token=refresh_token, expires_at=expires_at)
 
     def _parse_devices_response(self, response: Any) -> list[YeediDevice]:

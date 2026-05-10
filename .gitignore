@@ -20,8 +20,25 @@ wheels/
 .installed.cfg
 *.egg
 
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.pyc
-*.pyo
+# Virtual environment
+.venv/
+venv/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
 *~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific
+.env
+.env.*
+*.log
+
+# Development artifacts
+generated_prompts/

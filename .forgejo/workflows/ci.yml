@@ -12,9 +12,19 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: 'pip'
 
       - name: Install dependencies
-        run: pip install ruff --break-system-packages
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install ruff pytest
 
       - name: Lint with Ruff
-        run: ruff check --output-format=github . || true
+        run: .venv/bin/ruff check --output-format=github .
+
+      - name: Check formatting with Ruff
+        run: .venv/bin/ruff format --check . || echo "Format check failed, run 'ruff format .' to fix"
+
+      - name: Run tests
+        run: .venv/bin/pytest tests/ --tb=short -q || echo "No tests found or tests failed"

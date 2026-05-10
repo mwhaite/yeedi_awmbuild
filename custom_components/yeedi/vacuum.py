@@ -19,8 +19,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .api import YeediApiClient
-from .coordinator import YeediDataUpdateCoordinator
 from .const import DATA_CLIENT, DATA_COORDINATOR, DOMAIN
+from .coordinator import YeediDataUpdateCoordinator
 
 STATUS_MAP = {
     "cleaning": STATE_CLEANING,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -27,7 +27,7 @@ class YeediDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
 
     async def _async_update_data(self) -> dict[str, dict[str, Any]]:
         try:
-            if self._client.expires_at and datetime.now(timezone.utc) >= self._client.expires_at:
+            if self._client.expires_at and datetime.now(UTC) >= self._client.expires_at:
                 await self._client.async_refresh_token()
             devices = await self._client.async_list_devices()
             statuses: dict[str, dict[str, Any]] = {}
