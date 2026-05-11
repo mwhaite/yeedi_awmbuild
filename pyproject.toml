@@ -1,27 +1,18 @@
 [build-system]
-requires = ["setuptools>=75.0"]
+requires = ["setuptools>=64.0"]
 build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "yeedi-awmbuild"
 version = "0.1.0"
-description = "Home Assistant custom integration for Yeedi robot vacuums"
-requires-python = ">=3.12"
+description = "Yeedi Home Assistant integration (AWM build)"
 license = {text = "MIT"}
+requires-python = ">=3.12"
+dependencies = []
 
 [tool.ruff]
 target-version = "py312"
-line-length = 120
+line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "ARG", "PTH", "BLE", "C4", "RUF"]
-ignore = ["E501"]
-
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
-docstring-code-format = true
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
+select = ["E", "F", "I", "N", "W"]
