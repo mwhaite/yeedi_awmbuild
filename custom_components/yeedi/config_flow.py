@@ -94,13 +94,20 @@ class YeediConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         schema = vol.Schema(
             {
-                vol.Required(CONF_USERNAME): str,
+                vol.Required(CONF_USERNAME, default=self._reauth_entry.data[CONF_USERNAME]): str,
                 vol.Required(CONF_PASSWORD): str,
-                vol.Optional(CONF_REGION): str,
-                vol.Optional(CONF_BASE_URL): str,
+                vol.Optional(CONF_REGION, default=self._reauth_entry.data.get(CONF_REGION, "")): str,
+                vol.Optional(CONF_BASE_URL, default=self._reauth_entry.data.get(CONF_BASE_URL, "")): str,
             }
         )
-        return self.async_show_form(step_id="reauth_confirm", data_schema=schema, errors=errors)
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={
+                CONF_USERNAME: self._reauth_entry.data[CONF_USERNAME]
+            },
+        )
 
     @staticmethod
     def async_get_options_flow(config_entry: config_entries.ConfigEntry) -> config_entries.OptionsFlow:

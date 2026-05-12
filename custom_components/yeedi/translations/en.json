@@ -7,7 +7,7 @@
       },
       "reauth_confirm": {
         "title": "Reauthenticate",
-        "description": "Authentication expired. Enter your credentials again."
+        "description": "Authentication expired. Re-enter credentials for {username}."
       }
     },
     "error": {
