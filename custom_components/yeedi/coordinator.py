@@ -33,21 +33,24 @@ class YeediDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
             devices = await self._client.async_list_devices()
             statuses: dict[str, dict[str, Any]] = {}
             self.devices = {device.device_id: device for device in devices}
-            for device in devices:
-                if device.status is not None:
-                    statuses[device.device_id] = device.status
-            # Concurrently fetch status for devices that need it
-            fetch_ids = [d.device_id for d in devices if d.status is None]
-            if fetch_ids:
-                results = await asyncio.gather(
-                    *[self._client.async_get_device_status(did) for did in fetch_ids],
-                    return_exceptions=True,
-                )
-                for device_id, result in zip(fetch_ids, results):
-                    if isinstance(result, Exception):
+            # Always fetch fresh status for all devices to avoid stale data
+            all_ids = [device.device_id for device in devices]
+            results = await asyncio.gather(
+                *[self._client.async_get_device_status(did) for did in all_ids],
+                return_exceptions=True,
+            )
+            device_map = {device.device_id: device for device in devices}
+            for device_id, result in zip(all_ids, results):
+                if isinstance(result, Exception):
+                    # Fall back to potentially stale status from list response
+                    device = device_map[device_id]
+                    if device.status is not None:
+                        statuses[device_id] = device.status
+                    else:
                         raise UpdateFailed(
                             f"Failed to fetch status for {device_id}: {result}"
                         ) from result
+                else:
                     statuses[device_id] = result
             return statuses
         except YeediApiError as err:
