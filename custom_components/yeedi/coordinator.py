@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+import asyncio
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -35,8 +36,19 @@ class YeediDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]
             for device in devices:
                 if device.status is not None:
                     statuses[device.device_id] = device.status
-                    continue
-                statuses[device.device_id] = await self._client.async_get_device_status(device.device_id)
+            # Concurrently fetch status for devices that need it
+            fetch_ids = [d.device_id for d in devices if d.status is None]
+            if fetch_ids:
+                results = await asyncio.gather(
+                    *[self._client.async_get_device_status(did) for did in fetch_ids],
+                    return_exceptions=True,
+                )
+                for device_id, result in zip(fetch_ids, results):
+                    if isinstance(result, Exception):
+                        raise UpdateFailed(
+                            f"Failed to fetch status for {device_id}: {result}"
+                        ) from result
+                    statuses[device_id] = result
             return statuses
         except YeediApiError as err:
             raise UpdateFailed(str(err)) from err
