@@ -42,3 +42,6 @@ Thumbs.db
 
 # Development artifacts
 generated_prompts/
+
+# GSD infrastructure
+.gsd/

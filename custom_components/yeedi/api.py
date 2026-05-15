@@ -85,7 +85,9 @@ class YeediApiClient:
         self._ctx.refresh_token = auth.refresh_token
         self._ctx.expires_at = auth.expires_at
 
-    async def async_login(self, username: str, password: str, region: str | None = None) -> AuthResult:
+    async def async_login(
+        self, username: str, password: str, region: str | None = None
+    ) -> AuthResult:
         endpoint = self._require_endpoint("login")
         payload = {
             "username": username,
@@ -120,7 +122,9 @@ class YeediApiClient:
             raise YeediApiError("Device status response is not a JSON object.")
         return response
 
-    async def async_send_command(self, device_id: str, command: str, params: dict[str, Any] | None = None) -> None:
+    async def async_send_command(
+        self, device_id: str, command: str, params: dict[str, Any] | None = None
+    ) -> None:
         endpoint = self._require_endpoint("command")
         endpoint = endpoint.format(device_id=device_id)
         payload = {
@@ -154,7 +158,14 @@ class YeediApiClient:
             headers["Authorization"] = f"Bearer {self._ctx.access_token}"
         return headers
 
-    async def _request(self, method: str, endpoint: str, *, json: dict[str, Any] | None = None, include_auth: bool = True) -> Any:
+    async def _request(
+        self,
+        method: str,
+        endpoint: str,
+        *,
+        json: dict[str, Any] | None = None,
+        include_auth: bool = True,
+    ) -> Any:
         url = self._build_url(endpoint)
         headers = self._headers(include_auth=include_auth)
         LOGGER.debug("Yeedi request %s %s", method, endpoint)
@@ -180,7 +191,9 @@ class YeediApiClient:
         expires_in = response.get("expires_in")
         if isinstance(expires_in, (int, float)):
             expires_at = datetime.now(UTC) + timedelta(seconds=int(expires_in))
-        return AuthResult(access_token=access_token, refresh_token=refresh_token, expires_at=expires_at)
+        return AuthResult(
+            access_token=access_token, refresh_token=refresh_token, expires_at=expires_at
+        )
 
     def _parse_devices_response(self, response: Any) -> list[YeediDevice]:
         if isinstance(response, list):

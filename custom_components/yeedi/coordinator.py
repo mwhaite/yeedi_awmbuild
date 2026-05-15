@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import asyncio
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -16,7 +16,9 @@ from .const import DEFAULT_POLL_INTERVAL, LOGGER
 class YeediDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
     """Coordinator for polling Yeedi device status."""
 
-    def __init__(self, hass: HomeAssistant, client: YeediApiClient, update_interval: timedelta | None = None) -> None:
+    def __init__(
+        self, hass: HomeAssistant, client: YeediApiClient, update_interval: timedelta | None = None
+    ) -> None:
         super().__init__(
             hass,
             LOGGER,

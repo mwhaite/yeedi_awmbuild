@@ -1,0 +1,35 @@
+title = "yeedi_awmbuild gitleaks config"
+
+# Extend default gitleaks rules rather than replacing them
+useDefault = true
+
+[allowlist]
+description = "Allowlist for known false positives specific to yeedi_awmbuild"
+
+# Paths to skip entirely during scanning.
+# .venv/ and __pycache__ are gitignored but gitleaks indexes the filesystem directly,
+# so eval/exec usage in vendored site-packages would otherwise trigger false alarms.
+paths = [
+    '''__pycache__/''',
+    '''\.ruff_cache/''',
+    '''\.venv/''',
+    '''venv/''',
+    '''node_modules/''',
+    '''\.git/''',
+    '''\.gsd/''',
+]
+
+# Regex patterns whose matches are excluded from all rule findings.
+# These cover username references in standard repo URLs and codeowner entries
+# that look like credential tokens to gitleaks' default rules.
+regexes = [
+    # Forgejo/self-hosted git URLs containing a username segment
+    '''forgejo\.[a-zA-Z0-9.-]+\.(net|com|org|io)/Mark/''',
+    # GitHub, GitLab, Bitbucket username-in-URL patterns
+    '''github\.com/Mark/''',
+    '''gitlab\.com/Mark/''',
+    '''bitbucket\.org/Mark/''',
+    # GitHub/GitHub-style @-username in codeowner entries only
+    # This is narrow enough not to suppress real token findings in other contexts
+    '''"@Mark"''',
+]

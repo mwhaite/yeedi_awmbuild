@@ -36,7 +36,9 @@ STATUS_MAP = {
 class YeediVacuumEntity(CoordinatorEntity[YeediDataUpdateCoordinator], VacuumEntity):
     """Representation of a Yeedi vacuum."""
 
-    def __init__(self, coordinator: YeediDataUpdateCoordinator, client: YeediApiClient, device_id: str) -> None:
+    def __init__(
+        self, coordinator: YeediDataUpdateCoordinator, client: YeediApiClient, device_id: str
+    ) -> None:
         super().__init__(coordinator)
         self._client = client
         self._device_id = device_id
@@ -125,7 +127,9 @@ class YeediVacuumEntity(CoordinatorEntity[YeediDataUpdateCoordinator], VacuumEnt
         await self._client.async_send_command(self._device_id, "locate")
 
     async def async_set_fan_speed(self, fan_speed: str) -> None:
-        await self._client.async_send_command(self._device_id, "set_fan_speed", {"fan_speed": fan_speed})
+        await self._client.async_send_command(
+            self._device_id, "set_fan_speed", {"fan_speed": fan_speed}
+        )
 
     @property
     def _status(self) -> dict[str, Any] | None:
@@ -150,7 +154,6 @@ async def async_setup_entry(
     client: YeediApiClient = data[DATA_CLIENT]
 
     entities = [
-        YeediVacuumEntity(coordinator, client, device_id)
-        for device_id in coordinator.devices
+        YeediVacuumEntity(coordinator, client, device_id) for device_id in coordinator.devices
     ]
     async_add_entities(entities)

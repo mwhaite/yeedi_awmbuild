@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
+
+_LOGGER = logging.getLogger(__name__)
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -80,3 +83,19 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     return unload_ok
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate config entry to a new version."""
+    _LOGGER.debug(
+        "Migrating %s from version %s", entry.title, entry.version
+    )
+
+    if entry.version == 1:
+        # No migration steps yet — version 1 is the initial schema
+        pass
+
+    _LOGGER.debug(
+        "Migration to version %s successful", entry.version
+    )
+    return True
