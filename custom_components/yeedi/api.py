@@ -158,6 +158,17 @@ class YeediApiClient:
             headers["Authorization"] = f"Bearer {self._ctx.access_token}"
         return headers
 
+    def _is_transient_failure(self, err: Exception, response: Any | None) -> bool:
+        """Return True if the error is likely transient and worth retrying."""
+        # Connection-level errors (no HTTP response)
+        import aiohttp
+        if isinstance(err, (aiohttp.ClientError, TimeoutError)):
+            return True
+        # HTTP-level: 5xx server errors
+        if response is not None and hasattr(response, "status"):
+            return 500 <= response.status < 600
+        return False
+
     async def _request(
         self,
         method: str,
@@ -165,16 +176,24 @@ class YeediApiClient:
         *,
         json: dict[str, Any] | None = None,
         include_auth: bool = True,
+        _retry_count: int = 0,
     ) -> Any:
         url = self._build_url(endpoint)
         headers = self._headers(include_auth=include_auth)
-        LOGGER.debug("Yeedi request %s %s", method, endpoint)
+        LOGGER.debug("Yeedi request %s %s (attempt %d)", method, endpoint, _retry_count + 1)
+        response = None
         try:
             async with async_timeout.timeout(20):
                 response = await self._session.request(method, url, json=json, headers=headers)
                 response.raise_for_status()
                 return await response.json()
         except Exception as err:
+            import asyncio
+            if _retry_count < 2 and self._is_transient_failure(err, response):
+                await asyncio.sleep(2 ** _retry_count)
+                return await self._request(
+                    method, endpoint, json=json, include_auth=include_auth, _retry_count=_retry_count + 1
+                )
             raise YeediApiError(f"Yeedi API request failed: {err}") from err
 
     def _parse_auth_response(self, response: Any) -> AuthResult:

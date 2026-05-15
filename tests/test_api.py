@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from custom_components.yeedi.api import AuthResult, YeediApiClient, YeediApiError, YeediDevice
 
 
@@ -138,3 +140,109 @@ def test_devices_response_skip_invalid_items():
     devices = client._parse_devices_response(response)
     assert len(devices) == 1
     assert devices[0].device_id == "d1"
+
+
+class FailingOnceSession:
+    """Mock session that fails once then succeeds."""
+
+    def __init__(self, fail_on_attempt: int = 1):
+        self.attempts = 0
+        self.fail_on_attempt = fail_on_attempt
+
+    async def request(self, method, url, **kwargs):
+        self.attempts += 1
+        if self.attempts == self.fail_on_attempt:
+            raise Exception("Transient error")
+        response = MockResponse({"devices": []})
+        return response
+
+
+class FailingAlwaysSession:
+    """Mock session that always fails."""
+
+    def __init__(self):
+        self.attempts = 0
+
+    async def request(self, method, url, **kwargs):
+        self.attempts += 1
+        raise Exception("Persistent error")
+
+
+class FiveHundredSession:
+    """Mock session that returns 500 once then 200."""
+
+    def __init__(self):
+        self.attempts = 0
+
+    async def request(self, method, url, **kwargs):
+        self.attempts += 1
+        if self.attempts == 1:
+            err = Exception("HTTP 500")
+            err.status = 500
+            raise err
+        return MockResponse({"devices": []})
+
+
+@pytest.mark.asyncio
+async def test_retry_on_transient_connection_error():
+    """Test that transient connection errors trigger retry."""
+    from custom_components.yeedi.api import YeediApiClient
+
+    client = YeediApiClient(FailingOnceSession(), base_url="https://api.example.com")
+    client.ENDPOINTS = {"devices": "devices"}  # patch for test
+
+    devices = await client.async_list_devices()
+    assert len(devices) == 0
+    assert client._session.attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_retry_on_500_server_error():
+    """Test that 5xx HTTP errors trigger retry."""
+    from custom_components.yeedi.api import YeediApiClient
+
+    client = YeediApiClient(FiveHundredSession(), base_url="https://api.example.com")
+    client.ENDPOINTS = {"devices": "devices"}
+
+    devices = await client.async_list_devices()
+    assert len(devices) == 0
+    assert client._session.attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_retry_max_2_attempts():
+    """Test that after 2 retries, the error is raised."""
+    from custom_components.yeedi.api import YeediApiError
+
+    client = YeediApiClient(FailingAlwaysSession(), base_url="https://api.example.com")
+    client.ENDPOINTS = {"devices": "devices"}
+
+    with pytest.raises(YeediApiError, match="Persistent error"):
+        await client.async_list_devices()
+    assert client._session.attempts == 3  # initial + 2 retries
+
+
+def test_is_transient_failure_connection_error():
+    """Test that connection errors are treated as transient."""
+    import aiohttp
+    client = YeediApiClient(session=None)
+    assert client._is_transient_failure(aiohttp.ClientError("connection reset"), None) is True
+    assert client._is_transient_failure(TimeoutError("timeout"), None) is True
+
+
+def test_is_transient_failure_5xx():
+    """Test that 5xx HTTP responses are treated as transient."""
+    client = YeediApiClient(session=None)
+    resp = MockResponse({}, status=500)
+    assert client._is_transient_failure(Exception(), resp) is True
+    resp = MockResponse({}, status=503)
+    assert client._is_transient_failure(Exception(), resp) is True
+
+
+def test_is_transient_failure_4xx():
+    """Test that 4xx HTTP responses are NOT transient."""
+    client = YeediApiClient(session=None)
+    resp = MockResponse({}, status=400)
+    assert client._is_transient_failure(Exception(), resp) is False
+    resp = MockResponse({}, status=401)
+    assert client._is_transient_failure(Exception(), resp) is False
