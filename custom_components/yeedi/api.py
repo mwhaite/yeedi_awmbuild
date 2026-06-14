@@ -6,11 +6,10 @@ Do not add or change endpoints here without verifying the forum reference.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
-
-import async_timeout
 
 from .const import LOGGER
 
@@ -49,7 +48,16 @@ class YeediRequestContext:
     expires_at: datetime | None = None
 
 
-# Endpoint placeholders. Replace with values from the Node-RED flow.
+# Endpoint paths — replace with actual values from the Node-RED flow.
+#
+# Expected format (examples — substitute your region and app id):
+#   login:          "/api/region/app/login"
+#   refresh:        "/api/region/app/token/refresh"
+#   devices:        "/api/region/app/device/list"
+#   device_status:  "/api/region/app/device/{device_id}/status"
+#   command:        "/api/region/app/device/{device_id}/command"
+#
+# These may be absolute URLs if your setup does not use a base_url.
 ENDPOINTS: dict[str, str | None] = {
     "login": None,
     "refresh": None,
@@ -67,6 +75,7 @@ class YeediApiClient:
         self._base_url = base_url
         self._region = region
         self._ctx = YeediRequestContext()
+        self.ENDPOINTS = ENDPOINTS.copy()
 
     @property
     def access_token(self) -> str | None:
@@ -135,7 +144,7 @@ class YeediApiClient:
         await self._request("POST", endpoint, json=payload)
 
     def _require_endpoint(self, key: str) -> str:
-        endpoint = ENDPOINTS.get(key)
+        endpoint = self.ENDPOINTS.get(key)
         if not endpoint:
             raise YeediApiError(
                 f"Endpoint '{key}' is not configured. "
@@ -162,6 +171,7 @@ class YeediApiClient:
         """Return True if the error is likely transient and worth retrying."""
         # Connection-level errors (no HTTP response)
         import aiohttp
+
         if isinstance(err, (aiohttp.ClientError, TimeoutError)):
             return True
         # HTTP-level: 5xx server errors
@@ -183,16 +193,19 @@ class YeediApiClient:
         LOGGER.debug("Yeedi request %s %s (attempt %d)", method, endpoint, _retry_count + 1)
         response = None
         try:
-            async with async_timeout.timeout(20):
+            async with asyncio.timeout(20):
                 response = await self._session.request(method, url, json=json, headers=headers)
                 response.raise_for_status()
                 return await response.json()
         except Exception as err:
-            import asyncio
             if _retry_count < 2 and self._is_transient_failure(err, response):
-                await asyncio.sleep(2 ** _retry_count)
+                await asyncio.sleep(2**_retry_count)
                 return await self._request(
-                    method, endpoint, json=json, include_auth=include_auth, _retry_count=_retry_count + 1
+                    method,
+                    endpoint,
+                    json=json,
+                    include_auth=include_auth,
+                    _retry_count=_retry_count + 1,
                 )
             raise YeediApiError(f"Yeedi API request failed: {err}") from err
 

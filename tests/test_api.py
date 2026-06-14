@@ -152,20 +152,20 @@ class FailingOnceSession:
     async def request(self, method, url, **kwargs):
         self.attempts += 1
         if self.attempts == self.fail_on_attempt:
-            raise Exception("Transient error")
+            raise TimeoutError("Transient error")
         response = MockResponse({"devices": []})
         return response
 
 
 class FailingAlwaysSession:
-    """Mock session that always fails."""
+    """Mock session that always fails with transient errors."""
 
     def __init__(self):
         self.attempts = 0
 
     async def request(self, method, url, **kwargs):
         self.attempts += 1
-        raise Exception("Persistent error")
+        raise TimeoutError("Persistent error")
 
 
 class FiveHundredSession:
@@ -177,9 +177,9 @@ class FiveHundredSession:
     async def request(self, method, url, **kwargs):
         self.attempts += 1
         if self.attempts == 1:
-            err = Exception("HTTP 500")
-            err.status = 500
-            raise err
+            # Return a 500 response — raise_for_status will throw, but response
+            # is still passed to _is_transient_failure so it sees status 500
+            return MockResponse({"devices": []}, status=500)
         return MockResponse({"devices": []})
 
 
@@ -225,6 +225,7 @@ async def test_retry_max_2_attempts():
 def test_is_transient_failure_connection_error():
     """Test that connection errors are treated as transient."""
     import aiohttp
+
     client = YeediApiClient(session=None)
     assert client._is_transient_failure(aiohttp.ClientError("connection reset"), None) is True
     assert client._is_transient_failure(TimeoutError("timeout"), None) is True

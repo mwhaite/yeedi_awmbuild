@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
+from typing import TYPE_CHECKING
 
-from homeassistant.const import Platform
+if TYPE_CHECKING:
+    from homeassistant.const import Platform
 
 DOMAIN = "yeedi"
 
@@ -18,6 +20,6 @@ DEFAULT_POLL_INTERVAL = timedelta(seconds=60)
 DATA_CLIENT = "client"
 DATA_COORDINATOR = "coordinator"
 
-PLATFORMS: list[Platform] = [Platform.VACUUM]
+PLATFORMS: list[Platform] = ["vacuum"]
 
 LOGGER = logging.getLogger(__name__)

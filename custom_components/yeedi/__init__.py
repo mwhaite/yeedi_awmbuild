@@ -5,12 +5,6 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 
-_LOGGER = logging.getLogger(__name__)
-
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
-
 from .api import AuthResult, YeediApiClient
 from .const import (
     CONF_BASE_URL,
@@ -22,7 +16,8 @@ from .const import (
     DOMAIN,
     PLATFORMS,
 )
-from .coordinator import YeediDataUpdateCoordinator
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _parse_expires_at(value: str | float | int | None) -> datetime | None:
@@ -38,8 +33,12 @@ def _parse_expires_at(value: str | float | int | None) -> datetime | None:
     return None
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_setup_entry(hass, entry) -> bool:
     """Set up Yeedi from a config entry."""
+
+    from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+    from .coordinator import YeediDataUpdateCoordinator
 
     session = async_get_clientsession(hass)
     base_url = entry.options.get(CONF_BASE_URL) or entry.data.get(CONF_BASE_URL)
@@ -72,11 +71,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+async def _async_update_listener(hass, entry) -> None:
     await hass.config_entries.async_reload(entry.entry_id)
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_entry(hass, entry) -> bool:
     """Unload a config entry."""
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
@@ -85,17 +84,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return unload_ok
 
 
-async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_migrate_entry(hass, entry) -> bool:
     """Migrate config entry to a new version."""
-    _LOGGER.debug(
-        "Migrating %s from version %s", entry.title, entry.version
-    )
+    _LOGGER.debug("Migrating %s from version %s", entry.title, entry.version)
 
     if entry.version == 1:
         # No migration steps yet — version 1 is the initial schema
         pass
 
-    _LOGGER.debug(
-        "Migration to version %s successful", entry.version
-    )
+    _LOGGER.debug("Migration to version %s successful", entry.version)
     return True
