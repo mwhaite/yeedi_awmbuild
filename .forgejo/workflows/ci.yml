@@ -1,30 +1,42 @@
 name: CI
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
   lint:
     runs-on: ubuntu-latest
+    container:
+      image: docker.io/library/python:3.12-slim
     steps:
-      - uses: https://git.forgejo.org/actions/checkout@v4
-
-      - name: Set up Python
-        uses: https://git.forgejo.org/actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: 'pip'
-
-      - name: Install dependencies
+      - name: Checkout code
+        shell: bash
         run: |
+          set -euo pipefail
+          apt-get update -qq
+          apt-get install -y --no-install-recommends git ca-certificates
+          git clone --depth 1 https://forgejo.tail018ac4.ts.net/Mark/yeedi_awmbuild.git .
+          git checkout "${FORGEJO_SHA:-HEAD}"
+
+      - name: Set up venv
+        shell: bash
+        run: |
+          set -euo pipefail
           python3 -m venv .venv
-          .venv/bin/pip install --upgrade pip
-          .venv/bin/pip install ruff pytest pytest-asyncio
+          .venv/bin/pip install --no-cache-dir --upgrade pip
+          .venv/bin/pip install --no-cache-dir ruff pytest pytest-asyncio
 
       - name: Lint with Ruff
+        shell: bash
         run: .venv/bin/ruff check --output-format=github .
 
       - name: Check formatting with Ruff
+        shell: bash
         run: .venv/bin/ruff format --check . || echo "Format check failed, run 'ruff format .' to fix"
 
       - name: Run tests
+        shell: bash
         run: .venv/bin/pytest tests/ --tb=short -q || echo "No tests found or tests failed"
