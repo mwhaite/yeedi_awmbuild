@@ -1,0 +1,303 @@
+# Reverse-engineered Yeedi Integration Spec
+#
+# This spec is derived from ONE source and nothing else:
+#   Tomschin's Node-RED flow on the Home Assistant community forum,
+#   comment #48: https://community.home-assistant.io/t/request-for-yeedi-vacuum-integration/348575/48
+#
+# Saved JSON of the flow at parse time: comment_48_flow.json (82 nodes, 1 flow).
+# Every claim, entity, sensor, button, switch, select below corresponds to an actual
+# node in that JSON. Anything not present in the JSON is not in this spec.
+
+# ---------------------------------------------------------------------------
+# 1. Surface inventory (raw count from the flow JSON)
+# ---------------------------------------------------------------------------
+# 82 nodes total, organised by tab "Yeedi wraper".
+# Tab name (typo original) preserved verbatim from the JSON label field.
+# Only the nodes that matter (the rest are junction/debug/catch/inject/connect):
+#
+#   1  ecovacs-account     country=AT, login="yeedi.com"          (creds)
+#   1  ecovacs-deebot      name="Yeedi", deviceNumber=1,
+#                          connectOnStartup=true,
+#                          enableGetMapsOnStartup=false,
+#                          enableSimpleEvents=false              (bot)
+#   9  ecovacs-deebot-command                                          (commands)
+#   1  switch "Type"       routes msg.payload.type to 24 outputs   (event router)
+#   3  junction            fan-out helpers
+#   2  trigger             debounce (0ms) for select startup writes
+#   1  ha-device-config    "yeedi vacuum cleaner"
+#  25  ha-entity-config    one per entity, see section 6
+#  17  ha-sensor
+#   5  ha-button
+#   2  ha-select
+#   1  ha-switch
+#   1  server              "Home Assistant"                        (HA server ref)
+#   2  api-call-service    start-of-flow trigger handlers
+#   2  change              payload rewrites for select commands
+#   3  inject              manual-test triggers (debug only)
+#   4  debug               passthrough; one is "May add this sensor"
+#   1  catch               error funnel
+
+# ---------------------------------------------------------------------------
+# 2. Account (from the ecovacs-account node)
+# ---------------------------------------------------------------------------
+# The flow has exactly one ecovacs-account node with these fields:
+#   countryCode: "AT"
+#   login:       "yeedi.com"
+#   name:        ""
+# Anything else (server, continent, etc.) is configured inside the node and
+# is NOT visible in the flow JSON. The flow does not pin them.
+
+account:
+  fields_in_flow:
+    countryCode: "AT"        # alpha-2 country code (Austria in this flow)
+    login: "yeedi.com"        # determines which cloud backend (vs "ecovacs.com")
+    name: ""                  # optional friendly label; unused in this flow
+
+# ---------------------------------------------------------------------------
+# 3. Bot connection (from the ecovacs-deebot node)
+# ---------------------------------------------------------------------------
+bot:
+  fields_in_flow:
+    name: "Yeedi"
+    deviceNumber: 1
+    connectOnStartup: true
+    enableGetMapsOnStartup: false       # MAPS ARE NOT USED BY THIS FLOW
+    enableSimpleEvents: false           # raw event objects emitted, not summarised
+
+# ---------------------------------------------------------------------------
+# 4. Event surface (from switch "Type")
+# ---------------------------------------------------------------------------
+# The bot output goes to a single switch node named "Type". It has 25 outputs
+# (24 named + 1 nempty). Each rule is `payload.type == "<value>"`. The 24
+# named values ARE the event types the bot emits:
+event_types:
+  - info                     # out[0]  -> junction -> 5 info sensors
+  - ChargeState               # out[1]  -> sensor "ChargeState"
+  - SleepStatus              # out[2]  -> sensor "SleepStatus"
+  - BatteryInfo              # out[3]  -> sensor "Battery"
+  - DoNotDisturbEnabled      # out[4]  -> sensor + switch
+  - LastCleanLogs            # out[5]  -> sensor "Cleaning time"
+  - LifeSpan                 # out[6]  -> junction -> 3 lifespan sensors
+  - WaterBoxInfo              # out[7]  -> sensor "WaterBoxInfo"
+  - WaterLevel               # out[8]  -> sensor + trigger (startup write)
+  - LastError                 # out[9]  -> sensor "Last error"
+  - MoppingSystemInfo        # out[10] -> junction -> debug "May add this sensor"
+  - CleanSpeed               # out[11] -> sensor + trigger (startup write)
+  - CurrentUsedSpotAreas     # out[12] -> junction -> debug
+  - CleanSum                 # out[13] -> junction -> debug
+  - CurrentUsedCustomAreaValues  # out[14] -> junction -> debug
+  - CleanReport              # out[15] -> junction -> debug
+  - CleanLog                 # out[16] -> junction -> debug
+  - CurrentSpotAreaID        # out[17] -> junction -> debug
+  - ChargingPosition          # out[18] -> junction -> debug
+  - Position                 # out[19] -> junction -> debug
+  - RelocationState          # out[20] -> junction -> debug
+  - ContinuousCleaningEnabled  # out[21] -> junction -> debug
+  - CarpetPressure           # out[22] -> junction -> debug
+  - DusterRemind             # out[23] -> junction -> debug
+  # out[24] is the `nempty` fallback (rule "any non-empty msg.payload") -> debug
+
+# ---------------------------------------------------------------------------
+# 5. Sensor mapping (from the 17 ha-sensor nodes)
+# ---------------------------------------------------------------------------
+# Each sensor reads msg.payload.value (or a sub-path) and surfaces the result
+# to HA as a sensor entity. The state field IS the JSON path.
+sensors:
+  - entity_config: yeedi_battery
+    event: BatteryInfo
+    state_path: payload.value                    # raw battery percent
+    device_class: battery                        # from haConfig.device_class
+  - entity_config: yeedi_last_cleaning_time
+    event: LastCleanLogs
+    state_path: payload.value.totalTimeFormatted
+  - entity_config: yeedi_lifespan_filter
+    event: LifeSpan
+    state_path: payload.value.filter
+  - entity_config: yeedi_lifespann_sidebrush
+    event: LifeSpan
+    state_path: payload.value.side_brush         # original typo "lifespann_sidebrush" preserved
+  - entity_config: yeedi_lifespann_mainbrush
+    event: LifeSpan
+    state_path: payload.value.main_brush         # original typo "lifespann_mainbrush" preserved
+  - entity_config: yeedi_charge_state
+    event: ChargeState
+    state_path: payload.value
+  - entity_config: yeedi_sleep_state
+    event: SleepStatus
+    state_path: payload.value
+  - entity_config: yeedi_waterbox
+    event: WaterBoxInfo
+    state_path: payload.value
+  - entity_config: yeedi_do_not_disturbe
+    event: DoNotDisturbEnabled
+    state_path: payload.value                    # original typo "disturbe" preserved
+  - entity_config: yeedi_info_version
+    event: info
+    state_path: payload.value.version
+  - entity_config: yeedi_info_library_version
+    event: info
+    state_path: payload.value.libraryVersion
+  - entity_config: yeedi_info_device_class
+    event: info
+    state_path: payload.value.deviceClass
+  - entity_config: yeedi_info_device_model
+    event: info
+    state_path: payload.value.deviceModel
+  - entity_config: yeedi_info_nickname
+    event: info
+    state_path: payload.value.nickname
+  - entity_config: yeedi_last_error
+    event: LastError
+    state_path: payload.value
+  - entity_config: yeedi_clean_speed
+    event: CleanSpeed
+    state_path: payload.value
+  - entity_config: yeedi_water_level
+    event: WaterLevel
+    state_path: payload.value
+
+# ---------------------------------------------------------------------------
+# 6. Buttons (from the 5 ha-button nodes)
+# ---------------------------------------------------------------------------
+# Each button fires once on press -> ecovacs-deebot-command (with empty
+# payload) -> ecovacs-deebot bot input.
+buttons:
+  - entity_config: yeedi_start_automatic_cleaning
+    command: Clean
+  - entity_config: yeedi_return_to_charging_station
+    command: Charge
+  - entity_config: yeedi_pause_the_cleaning
+    command: Pause
+  - entity_config: find me
+    command: FindMe
+    arg: "30"                                     # ecovacs-deebot-command arg field
+  - entity_config: yeedi backwards
+    command: MoveBackward
+
+# ---------------------------------------------------------------------------
+# 7. Selects (from the 2 ha-select nodes)
+# ---------------------------------------------------------------------------
+# Select options are not defined inside the node in this flow; they are
+# left blank in the JSON (options=[]). Each select output flows through a
+# `change` node that rewrites the message into the bot.
+selects:
+  - entity_config: yeedi_water_level_select
+    name: Water level select
+    emits_command: SetWaterLevel
+    payload_rewrite: "arg = $number(payload); payload = 'SetWaterLevel'; delete previousValue"
+  - entity_config: yeedi_clean_speed_select
+    name: Clean Speed
+    emits_command: SetCleanSpeed
+    payload_rewrite: "arg = $number(payload); payload = 'SetCleanSpeed'; delete previousValue"
+
+# ---------------------------------------------------------------------------
+# 8. Switches (from the 1 ha-switch node)
+# ---------------------------------------------------------------------------
+# The switch has TWO output ports (1=on, 0=off presumably); each fires a
+# different command. Only one switch node exists.
+switches:
+  - entity_config: yeedi_do_not_disturbe_switch
+    output_0_command: EnableDoNotDisturb
+    output_0_arg: "20:00"
+    output_0_arg2: "6:00"
+    output_1_command: DisableDoNotDisturb
+    # NB: arg/arg2 live on the ecovacs-deebot-command nodes (verified in
+    # section 9). The switch itself doesn't carry them.
+
+# ---------------------------------------------------------------------------
+# 9. Commands (from the 9 ecovacs-deebot-command nodes)
+# ---------------------------------------------------------------------------
+# Each command node wires its output to ecovacs-deebot bot input.
+# arg/arg2/arg3 are forwarded as-is to the bot.
+commands:
+  - command: Connect
+    triggered_by: inject (manual, no HA UI entity)
+  - command: Clean
+    triggered_by: button "Start"
+  - command: Charge
+    triggered_by: button "Return"
+  - command: Pause
+    triggered_by: button "Pause"
+  - command: DisableDoNotDisturb
+    triggered_by: switch (off state)
+  - command: EnableDoNotDisturb
+    triggered_by: switch (on state)
+    arg: "20:00"
+    arg2: "6:00"
+  - command: FindMe
+    triggered_by: button "Find"
+    arg: "30"
+  - command: EnableBorderSpin
+    triggered_by: inject (manual, no HA UI entity)
+  - command: MoveBackward
+    triggered_by: button "Backwards"
+
+# ---------------------------------------------------------------------------
+# 10. Startup-write triggers (from the 2 trigger nodes)
+# ---------------------------------------------------------------------------
+# Two trigger nodes sit on the switch 'Type' outputs for WaterLevel and
+# CleanSpeed. Each trigger is op1="1", op2="0", duration="0" (no debounce),
+# and fires api-call-service to write the current HA select back to itself.
+#
+# This is Tomschin's mechanism for re-syncing the select entity values to
+# the bot on connect. It is NOT a generic "on startup" mechanism - it's a
+# "fire-on-every-event" trigger (duration=0) that calls the HA select
+# service for that entity.
+startup_writes:
+  - trigger_source_event: WaterLevel
+    trigger_source_event_index: 8                # same switch output as the WaterLevel sensor
+    api_call: select.select_option
+    target_entity: select.water_level
+    option: "2"
+  - trigger_source_event: CleanSpeed
+    trigger_source_event_index: 11
+    api_call: select.select_option
+    target_entity: select.clean_speed
+    option: "2"
+
+# ---------------------------------------------------------------------------
+# 11. Server / device / entity-config (the static references)
+# ---------------------------------------------------------------------------
+# server: name="Home Assistant", version=5, addon=true (i.e. Node-RED runs as
+#   an HA add-on). This affects how the flow talks back to HA but does not
+#   appear in the bot protocol.
+# ha-device-config: name="yeedi vacuum cleaner", hwVersion="",
+#   manufacturer="Ecovac", model="yeedi 2 hybrid", swVersion="0.2".
+# ha-entity-config: 25 entries, all bound to the ha-device-config above.
+device_metadata:
+  manufacturer: Ecovac
+  model: yeedi 2 hybrid
+  hw_version: ""
+  sw_version: "0.2"
+  friendly_name: yeedi vacuum cleaner
+
+# ---------------------------------------------------------------------------
+# 12. What's NOT in the flow
+# ---------------------------------------------------------------------------
+not_in_flow:
+  - "Any MQTT broker / topic / subscription. The ecovacs-deebot node hides
+    transport; the flow never declares mqtt in / mqtt out."
+  - "Map rendering. enableGetMapsOnStartup=false. The 8 map-related event
+    types (MapSet/MapSubset/MapTrace/MajorMap/MinorMap/CachedMapInfo/Positions/...)
+    are NOT in the switch's rule list. The switch has exactly 24 rules."
+  - "Room / area cleaning. No spotArea/customArea, no CLEAN_AREA, no room selectors."
+  - "Boundary / virtual wall / no-mop zones. Not present."
+  - "Fan speed entity beyond a select."
+  - "Polling. There is no http request / polling node."
+  - "Custom command service. There is no service-call node exposing
+    a freeform command/params surface to HA."
+
+# ---------------------------------------------------------------------------
+# 13. Layout summary by purpose
+# ---------------------------------------------------------------------------
+# Account        1 node    ecovacs-account
+# Bot            1 node    ecovacs-deebot
+# Commands       9 nodes   ecovacs-deebot-command
+# Router         1 node    switch "Type" (24 event-type rules)
+# Helpers        3 nodes   junction (info fan-out, lifespan fan-out, debug sink)
+# Select wiring  2 nodes   change (set arg=$number(payload), payload=command)
+# Select startup 2 nodes   trigger (0ms, fire on event) + api-call-service
+# Debug          4 nodes   debug ("May add this sensor", "missing selector", 2 errors)
+# Errors         1 node    catch
+# Test injects   3 nodes   inject (manual triggers for Connect and EnableBorderSpin)
+# Total          82 nodes
