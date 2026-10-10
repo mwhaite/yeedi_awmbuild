@@ -110,32 +110,37 @@ def test_country_list_includes_flow_country():
 
 # ----- Client (smoke, mocked HTTP) ---------------------------------------
 
+def make_response(json_body, status=200):
+    """Build a mock that quacks like an aiohttp ClientResponse context manager."""
+    resp = MagicMock()
+    resp.status = status
+    resp.raise_for_status = MagicMock()
+    resp.json = AsyncMock(return_value=json_body)
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=resp)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    return cm
+
+
+# ----- Client (smoke, mocked HTTP) ---------------------------------------
+
+
 @pytest.mark.asyncio
 async def test_client_login_happy_path():
-    """3-step login + device list, with mocked HTTP."""
+    """3-step login (GET user/login -> GET getAuthCode -> POST loginByItToken) + device list."""
     session = MagicMock()
-    # Each call to session.post returns an async context manager.
-    def make_post(json_body, status=200):
-        resp = MagicMock()
-        resp.status = status
-        resp.raise_for_status = MagicMock()
-        resp.json = AsyncMock(return_value=json_body)
-        resp_cm = MagicMock()
-        resp_cm.__aenter__ = AsyncMock(return_value=resp)
-        resp_cm.__aexit__ = AsyncMock(return_value=None)
-        return resp_cm
+    session.get = MagicMock(side_effect=[
+        make_response({"uid": "uid-123", "accessToken": "step1-tok"}),  # user/login
+        make_response({"authCode": "auth-code-xyz"}),                    # getAuthCode
+    ])
+    session.post = MagicMock(side_effect=[
+        make_response({"result": "ok", "token": "long-token", "userId": "uid-123", "last": 604800000}),  # loginByItToken
+        make_response({"result": "ok", "data": [{"did": "did-A", "deviceClass": "vacuum",
+                                                  "deviceModel": "yeedi 2 hybrid",
+                                                  "deviceName": "Tomschin", "resource": "did-A"}]}),  # GetDeviceList
+    ])
 
-    responses = [
-        make_post({"uid": "uid-123", "accessToken": "step1-tok"}),     # user/login
-        make_post({"authCode": "auth-code-xyz"}),                       # getAuthCode
-        make_post({"result": "ok", "token": "long-token", "userId": "uid-123", "last": 604800000}),  # loginByItToken
-        make_post({"result": "ok", "data": [{"did": "did-A", "deviceClass": "vacuum",
-                                              "deviceModel": "yeedi 2 hybrid",
-                                              "deviceName": "Tomschin", "resource": "did-A"}]}),  # GetDeviceList
-    ]
-    session.post = MagicMock(side_effect=responses)
-
-    client = YeediClient(session)
+    client = YeediClient(session, device_id="ha-abcdef012345")
     auth, devices = await client.async_login(
         email="tomschin@example.com", password="hunter2", country="AT"
     )
@@ -148,26 +153,36 @@ async def test_client_login_happy_path():
     assert devices[0].did == "did-A"
     assert devices[0].device_name == "Tomschin"
 
-    # Step 1 went to AT login URL.
-    call_urls = [c.args[0] for c in session.post.call_args_list]
-    assert AUTH_GL_API.format(country="at") in call_urls[0]
-    # Step 2 went to the openapi URL.
-    assert AUTH_GL_OPENAPI.format(country="at") in call_urls[1]
-    # Step 3 went to the EU portal.
-    assert call_urls[2].startswith(CONTINENT_TO_HOST["eu"])
+    # Step 1 was a GET to the AT login URL.
+    step1_url = session.get.call_args_list[0].args[0]
+    assert AUTH_GL_API.format(country="at") in step1_url
+    # Step 1 query string contains authAppkey + authSign + account + password.
+    step1_query = session.get.call_args_list[0].kwargs["params"]
+    assert "authAppkey" in step1_query
+    assert "authSign" in step1_query
+    assert step1_query["account"] == "tomschin@example.com"
+    # Password is MD5("hunter2") = 2ab96390c97dbecc7d2e6545fe1322eb
+    import hashlib
+    assert step1_query["password"] == hashlib.md5(b"hunter2").hexdigest()
+    # Step 2 was a GET to the openapi URL.
+    step2_url = session.get.call_args_list[1].args[0]
+    assert AUTH_GL_OPENAPI.format(country="at") in step2_url
+    # Step 3 was a POST to the EU portal.
+    step3_url = session.post.call_args_list[0].args[0]
+    assert step3_url.startswith(CONTINENT_TO_HOST["eu"])
+    # deviceId flowed into Step 1 URL path and Step 2 query string.
+    step1_url = session.get.call_args_list[0].args[0]
+    assert "ha-abcdef012345" in step1_url  # in path segment
+    step2_query = session.get.call_args_list[1].kwargs["params"]
+    assert step2_query["deviceId"] == "ha-abcdef012345"
 
 
 @pytest.mark.asyncio
 async def test_client_login_bad_credentials_step1():
     """Step 1 response without uid/accessToken -> YeediApiError."""
     session = MagicMock()
-    resp = MagicMock()
-    resp.raise_for_status = MagicMock()
-    resp.json = AsyncMock(return_value={"foo": "bar"})
-    resp_cm = MagicMock()
-    resp_cm.__aenter__ = AsyncMock(return_value=resp)
-    resp_cm.__aexit__ = AsyncMock(return_value=None)
-    session.post = MagicMock(return_value=resp_cm)
+    session.get = MagicMock(return_value=make_response({"foo": "bar"}))
+    session.post = MagicMock()
 
     client = YeediClient(session)
     with pytest.raises(YeediApiError):
@@ -177,32 +192,102 @@ async def test_client_login_bad_credentials_step1():
 
 
 @pytest.mark.asyncio
+async def test_client_login_1013_raises_device_verification_required():
+    """Step 1 returns 1013 -> DeviceVerificationRequired (config flow handles)."""
+    from custom_components.yeedi.client import DeviceVerificationRequired
+    session = MagicMock()
+    session.get = MagicMock(return_value=make_response(
+        {"code": 1013, "msg": "Please update to the latest version to continue."}
+    ))
+    session.post = MagicMock()
+
+    client = YeediClient(session)
+    with pytest.raises(DeviceVerificationRequired):
+        await client.async_login(email="a@b", password="pw", country="DE")
+    # No step 2 / 3 should be attempted.
+    assert session.get.call_count == 1
+    assert session.post.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_client_verify_device_flow():
+    """1013 -> request verify code -> verify code -> complete_login -> devices."""
+    from custom_components.yeedi.client import DeviceVerificationRequired
+    session = MagicMock()
+    # Order of HTTP calls during the verify recovery:
+    # 1. user/login (GET) -> 1013
+    # 2. getConfig (GET) -> public key
+    # 3. sendEmailVerifyCode (GET) -> code 0000
+    # 4. verifyDevice (GET) -> uid + accessToken
+    # 5. getAuthCode (GET) -> authCode
+    # 6. loginByItToken (POST) -> user_access_token
+    # 7. getDeviceList (POST) -> device data
+    # Use a real RSA-2048 SPKI public key so _rsa_encrypt_base64 actually
+    # succeeds. The encrypted value is never verified in this test.
+    import base64 as _b64
+    _test_pubkey = _b64.b64decode(
+        "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzNS9MOpTMmvtdlUuzHW8HnKnfSaXQ5a4z2S"
+        "gWR4FOAIqQATxkNVbriLeVmFwl1F2y5PqkfdkoUkGCNsWPpQ+a9gWd1GrIoVc7Oe7YUfenmeOtCVNSsM2K"
+        "hL8318ZdVIW4udCQrofmunnq407qoNkXOgZKzlsbzATxAXLYTWLulrK/nGUtDr4sc0pQnky/8MYG2f2luTU"
+        "eF+ZfoqKWQjj2Wu0iFdbj7c1kKwH/IXM14gtWygxhalRS3SSe6NSBY7FeuposggN4/1qEwa4AG3xRlPdNey"
+        "ncoHOlNmeChfeyhmkdd9Wdq6EyBHx50RBTGArrAFjHV0OdG8KIpmYYS6nnwIDAQAB"
+    )
+    pubkey_b64 = _b64.b64encode(_test_pubkey).decode()
+    import json as _json
+    getconfig_value = _json.dumps({"publicKey": pubkey_b64})  # single-layer JSON string
+    session.get = MagicMock(side_effect=[
+        make_response({"code": 1013, "msg": "Please update to the latest version to continue."}),  # user/login
+        make_response([{"key": "PUBLIC.KEY.CONFIG", "value": getconfig_value}]),  # getConfig (for sendEmail)
+        make_response({"code": "0000", "msg": "success"}),  # sendEmailVerifyCode
+        make_response([{"key": "PUBLIC.KEY.CONFIG", "value": getconfig_value}]),  # getConfig (for verifyDevice)
+        make_response({"uid": "u-new", "accessToken": "verify-tok"}),  # verifyDevice
+        make_response({"authCode": "ac"}),  # getAuthCode
+    ])
+    session.post = MagicMock(side_effect=[
+        make_response({"result": "ok", "token": "long", "userId": "u-new", "last": 604800000}),  # loginByItToken
+        make_response({"result": "ok", "data": []}),  # GetDeviceList
+    ])
+
+    client = YeediClient(session, device_id="ha-1234567890ab")
+    # Step 1: login hits 1013.
+    with pytest.raises(DeviceVerificationRequired):
+        await client.async_login(email="a@b.com", password="pw", country="US")
+
+    # The full recovery: send email code, then verify, then complete.
+    await client.request_device_verification_code(email="a@b.com", country="US")
+    verify_resp = await client.verify_device(email="a@b.com", code="654321", country="US")
+    assert verify_resp["uid"] == "u-new"
+    assert verify_resp["accessToken"] == "verify-tok"
+    auth = await client.complete_login(
+        uid=verify_resp["uid"],
+        login_token=verify_resp["accessToken"],
+        org="ECOYDWW",
+        country="US",
+    )
+    assert auth.user_access_token == "long"
+    devices = await client._async_get_devices()
+    assert devices == []
+
+
+@pytest.mark.asyncio
 async def test_client_login_china_uses_cn_org():
     """Country CN -> org ECOYDCN, portal host portal.ecouser.net."""
     session = MagicMock()
-    def make_post(json_body):
-        resp = MagicMock()
-        resp.raise_for_status = MagicMock()
-        resp.json = AsyncMock(return_value=json_body)
-        resp_cm = MagicMock()
-        resp_cm.__aenter__ = AsyncMock(return_value=resp)
-        resp_cm.__aexit__ = AsyncMock(return_value=None)
-        return resp_cm
-
+    session.get = MagicMock(side_effect=[
+        make_response({"uid": "u1", "accessToken": "t1"}),
+        make_response({"authCode": "ac"}),
+    ])
     session.post = MagicMock(side_effect=[
-        make_post({"uid": "u1", "accessToken": "t1"}),
-        make_post({"authCode": "ac"}),
-        make_post({"result": "ok", "token": "long", "userId": "u1", "last": 604800000}),
-        make_post({"result": "ok", "data": []}),
+        make_response({"result": "ok", "token": "long", "userId": "u1", "last": 604800000}),
+        make_response({"result": "ok", "data": []}),
     ])
 
     client = YeediClient(session)
     auth, _ = await client.async_login(email="x@y", password="pw", country="CN")
     assert auth.org == "ECOYDCN"
     # Portal URL is the CN one.
-    portal_call = session.post.call_args_list[2]
-    assert portal_call.args[0].startswith("https://portal.cn.ecouser.net/api") \
-        or portal_call.args[0].startswith("https://portal.ecouser.net/api")
+    portal_call = session.post.call_args_list[0]
+    assert portal_call.args[0].startswith("https://portal.ecouser.net/api")
 
 
 @pytest.mark.asyncio

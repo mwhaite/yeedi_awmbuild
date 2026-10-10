@@ -4,10 +4,16 @@
       "user": {
         "title": "Connect to Yeedi",
         "description": "Enter your Yeedi account email, password, and the 2-letter country code registered with your account."
+      },
+      "verify": {
+        "title": "Verify your Yeedi device",
+        "description": "Yeedi sent a verification code to {email}. Enter it below to complete device verification. (The code is one-time use and tied to this device; if you cancel and retry, the same code cannot be reused.)"
       }
     },
     "error": {
       "cannot_connect": "Failed to connect to the Yeedi cloud. Check your email, password, and country code.",
+      "invalid_verification_code": "The verification code is incorrect or expired. Try again, or restart setup to receive a new code.",
+      "verification_code_required": "Enter the 6-digit code from the email Yeedi just sent.",
       "unknown": "Unexpected error."
     }
   },

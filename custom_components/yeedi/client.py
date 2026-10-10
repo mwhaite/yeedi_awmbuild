@@ -14,22 +14,29 @@ the response payloads.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import logging
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlencode
 
 from aiohttp import ClientResponseError, ClientSession, ClientTimeout
 
 _LOGGER = logging.getLogger(__name__)
 
-# ----- URL templates (from library/constants.js of ecovacs-deebot.js) -----
+# ----- URL templates (from library/constants.js of ecovacs-deebot.js 1.0.0-alpha.0) -----
 #
-# Auth (3-step):
-#   Step 1: POST gl-{country}-api.yeedi.com/v1/private/{country}/EN/{deviceId}/
-#           {appCode}/{appVersion}/{channel}/{deviceType}/user/login
-#   Step 2: POST gl-{country}-openapi.yeedi.com/v1/global/auth/getAuthCode
+# Auth (GET with query params + authSign MD5):
+#   Step 1: GET  gl-{country}-api.yeedi.com/v1/private/{country}/EN/{deviceId}/
+#                 {appCode}/{appVersion}/{channel}/{deviceType}/user/login
+#                 ?account=...&password=...&authAppkey=...&authSign=...&requestId=...
+#                 &authTimespan=...&country=...&lang=EN&deviceId=...&appCode=...
+#                 &appVersion=...&channel=google_play&deviceType=1
+#   Step 2: GET  gl-{country}-openapi.yeedi.com/v1/global/auth/getAuthCode
+#                 ?openId=global&uid=...&accessToken=...&bizType=...&deviceId=...&...
 #   Step 3: POST <portal>/users/user.do           -> user_access_token (long-lived)
 #
 # Steady-state (commands + polling):
@@ -37,6 +44,11 @@ _LOGGER = logging.getLogger(__name__)
 
 AUTH_GL_API = "https://gl-{country}-api.yeedi.com"
 AUTH_GL_OPENAPI = "https://gl-{country}-openapi.yeedi.com"
+VERIFY_APP_VERSION = "3.14.0"
+VERIFY_GETCONFIG_PATH = "common/getConfig"
+VERIFY_SENDEMAIL_PATH = "user/sendEmailVerifyCode"
+VERIFY_DEVICE_PATH = "user/verifyDevice"
+VERIFY_PUBLIC_KEY_CONFIG_KEY = "PUBLIC.KEY.CONFIG"
 
 # Continent lookup for portal host. AT=EU (the flow's country code).
 COUNTRY_TO_CONTINENT = {
@@ -80,6 +92,14 @@ class YeediApiError(Exception):
     """Raised on any non-OK response from the Yeedi portal."""
 
 
+class DeviceVerificationRequired(YeediApiError):
+    """Raised when the API returns 1013 — user must complete email verification.
+
+    Caller should then call request_device_verification_code() to receive the
+    emailed code, then verify_device(code) to mint uid + accessToken.
+    """
+
+
 @dataclass
 class Device:
     """Discovered Yeedi vacuum bound to the account."""
@@ -103,73 +123,167 @@ class Auth:
 
 
 class YeediClient:
-    """Polling HTTP client for Yeedi cloud."""
+    """Polling HTTP client for Yeedi cloud.
 
-    def __init__(self, session: ClientSession) -> None:
+    Authentication follows the mrbungle64/ecovacs-deebot.js 1.0.0-alpha.0 flow:
+    every private-API call is a GET whose query string carries the authSign
+    MD5 over a sorted concatenation of (appkey + sorted(meta+params) + secret).
+    New deviceIds trigger the 1013 "Please update to the latest version" code;
+    the client surfaces DeviceVerificationRequired, the config flow then asks
+    the user to enter the email code, and verify_device() finalises login.
+    """
+
+    def __init__(
+        self,
+        session: ClientSession,
+        device_id: str | None = None,
+        auth: Auth | None = None,
+    ) -> None:
         self._session = session
-        self._auth: Auth | None = None
+        self._auth = auth
         self._continent = "eu"
-        self._device_id = "ha-" + hashlib.md5(
-            str(time.time_ns()).encode()
-        ).hexdigest()[:12]
+        # Stable deviceId: caller should pass one persisted across restarts.
+        # Fall back to a new random ID (legacy behaviour) if not provided.
+        if device_id is None:
+            device_id = "ha-" + hashlib.md5(
+                str(time.time_ns()).encode()
+            ).hexdigest()[:12]
+        self._device_id = device_id
 
     # ----- public API -------------------------------------------------------
 
-    async def async_login(
-        self, email: str, password: str, country: str
-    ) -> tuple[Auth, list[Device]]:
-        """3-step login + device discovery. Caches auth on the client."""
-        self._continent = COUNTRY_TO_CONTINENT.get(country.upper(), "ww")
-        country_upper = country.upper()
-        country_lower = country.lower()
+    @property
+    def device_id(self) -> str:
+        return self._device_id
 
-        # Step 1: user/login -> uid + accessToken
-        step1_url = (
+    @property
+    def auth(self) -> Auth | None:
+        return self._auth
+
+    def restore_auth(self, auth: Auth, country: str) -> None:
+        """Re-attach a previously-cached Auth to this client (skip login)."""
+        self._auth = auth
+        self._continent = COUNTRY_TO_CONTINENT.get(country.upper(), "ww")
+
+    # ----- meta + sign helpers ---------------------------------------------
+
+    def _meta(self, country_upper: str) -> dict[str, str]:
+        return {
+            "country": country_upper,
+            "lang": "EN",
+            "deviceId": self._device_id,
+            "appCode": APP_CODE,
+            "appVersion": APP_VERSION,
+            "channel": CHANNEL,
+            "deviceType": DEVICE_TYPE,
+        }
+
+    def _verify_meta(self, country_upper: str) -> dict[str, str]:
+        """Same as _meta but with country lowercased and the verify appVersion.
+
+        The verification endpoints use the same path structure as user/login
+        but with `appVersion=3.14.0` (per ecovacs-deebot.js constants).
+        """
+        m = self._meta(country_upper)
+        m["country"] = country_upper.lower()
+        m["appVersion"] = VERIFY_APP_VERSION
+        return m
+
+    def _build_query(
+        self,
+        params: dict[str, Any],
+        sign_params: dict[str, Any],
+        appkey: str,
+        secret: str,
+    ) -> dict[str, str]:
+        """Add authAppkey + authSign (MD5) into the query dict, return as strs.
+
+        Sign text: appkey + concat(k + "=" + v for k,v in sorted(sign_params)) + secret
+        """
+        keys = sorted(sign_params.keys())
+        sign_text = appkey + "".join(f"{k}={sign_params[k]}" for k in keys) + secret
+        sign = hashlib.md5(sign_text.encode("utf-8")).hexdigest()
+        out = {str(k): str(v) for k, v in params.items()}
+        out["authAppkey"] = appkey
+        out["authSign"] = sign
+        return out
+
+    def _request_id(self) -> str:
+        """md5 of a fresh uuid4 (matches ecovacs-deebot.js uniqid+md5)."""
+        return hashlib.md5(uuid.uuid4().hex.encode("utf-8")).hexdigest()
+
+    # ----- auth API calls --------------------------------------------------
+
+    async def _user_login_get(
+        self, email: str, password_hash: str, country: str
+    ) -> dict[str, Any]:
+        """Step 1: user/login -> {uid, accessToken} or 1013.
+
+        The Yeedi server returns 1013 ("Please update to the latest version to
+        continue") for a fresh, never-verified deviceId. The caller catches
+        DeviceVerificationRequired and continues with the email-verify flow.
+        """
+        country_lower = country.lower()
+        url = (
             f"{AUTH_GL_API.format(country=country_lower)}"
             f"/v1/private/{country_lower}/EN/{self._device_id}/{APP_CODE}"
             f"/{APP_VERSION}/{CHANNEL}/{DEVICE_TYPE}/user/login"
         )
-        step1_password = hashlib.md5(password.encode("utf-8")).hexdigest()
-        step1_body = {
+        now_ms = int(time.time() * 1000)
+        params = {
             "account": email,
-            "password": step1_password,
-            "authTime": int(time.time()),
-            "authAppKey": AUTH_USERLOGIN_AUTH_APPKEY_YD,
-            "authAppSecret": AUTH_USERLOGIN_SECRET_YD,
+            "password": password_hash,
+            "requestId": self._request_id(),
+            "authTimespan": now_ms,
+            "authTimeZone": "GMT-8",
         }
-        async with self._session.post(step1_url, json=step1_body, timeout=TIMEOUT) as r:
-            r.raise_for_status()
-            step1 = await r.json()
-        if "uid" not in step1 or "accessToken" not in step1:
-            raise YeediApiError(f"step1/user/login missing fields: {step1}")
-        uid = step1["uid"]
-
-        # Step 2: getAuthCode -> authCode
-        org = "ECOYDCN" if country_upper == "CN" else "ECOYDWW"
-        step2_url = (
-            f"{AUTH_GL_OPENAPI.format(country=country_lower)}/v1/global/auth/getAuthCode"
+        meta = self._meta(country.upper())
+        sign_params = {**meta, **params}
+        query = self._build_query(
+            params, sign_params,
+            AUTH_USERLOGIN_AUTH_APPKEY_YD, AUTH_USERLOGIN_SECRET_YD,
         )
-        step2_body = {
-            "clientId": uid,
-            "clientType": org,
-            "appId": AUTH_GETAUTH_AUTH_APPKEY_YD,
-            "secret": AUTH_GETAUTH_SECRET_YD,
-            "account": email,
-            "country": "Chinese" if country_upper == "CN" else country_upper,
-            "lang": "EN",
-            "deviceId": self._device_id,
-        }
-        async with self._session.post(step2_url, json=step2_body, timeout=TIMEOUT) as r:
-            r.raise_for_status()
-            step2 = await r.json()
-        if "authCode" not in step2:
-            raise YeediApiError(f"getAuthCode missing authCode: {step2}")
-        auth_code = step2["authCode"]
+        async with self._session.get(url, params=query, timeout=TIMEOUT) as r:
+            data = await r.json(content_type=None)
+        if isinstance(data, dict) and data.get("code") == 1013:
+            raise DeviceVerificationRequired(
+                f"user/login returned 1013: {data.get('msg')}"
+            )
+        if not isinstance(data, dict) or "uid" not in data or "accessToken" not in data:
+            raise YeediApiError(f"user/login missing fields: {data}")
+        return data
 
-        # Step 3: loginByItToken -> user_access_token
+    async def _get_auth_code_get(
+        self, uid: str, access_token: str, country: str
+    ) -> str:
+        """Step 2: getAuthCode -> authCode."""
+        url = f"{AUTH_GL_OPENAPI.format(country=country.lower())}/v1/global/auth/getAuthCode"
+        params = {
+            "openId": "global",
+            "uid": uid,
+            "accessToken": access_token,
+            "bizType": "",
+            "deviceId": self._device_id,
+            "authTimespan": int(time.time() * 1000),
+        }
+        # The getAuthCode sign uses the GETAUTH appkey+secret, not the userlogin ones.
+        query = self._build_query(
+            params, params,
+            AUTH_GETAUTH_AUTH_APPKEY_YD, AUTH_GETAUTH_SECRET_YD,
+        )
+        async with self._session.get(url, params=query, timeout=TIMEOUT) as r:
+            data = await r.json(content_type=None)
+        if not isinstance(data, dict) or "authCode" not in data:
+            raise YeediApiError(f"getAuthCode missing authCode: {data}")
+        return data["authCode"]
+
+    async def _login_by_it_token_post(
+        self, uid: str, auth_code: str, org: str, country_upper: str
+    ) -> dict[str, Any]:
+        """Step 3: loginByItToken -> user_access_token (long-lived portal token)."""
         portal_base = CONTINENT_TO_HOST[self._continent]
-        step3_url = f"{portal_base}/users/user.do"
-        step3_body = {
+        url = f"{portal_base}/users/user.do"
+        body = {
             "edition": "ECOGLOBLE",
             "userId": uid,
             "token": auth_code,
@@ -180,23 +294,181 @@ class YeediClient:
             "country": "Chinese" if country_upper == "CN" else country_upper,
             "todo": "loginByItToken",
         }
-        # Retry up to 3x on "set token error." (matches library behaviour).
         for _ in range(3):
-            async with self._session.post(step3_url, json=step3_body, timeout=TIMEOUT) as r:
-                r.raise_for_status()
-                step3 = await r.json()
-            if step3.get("result") == "ok":
-                break
-            if step3.get("result") == "fail" and step3.get("error") == "set token error.":
+            async with self._session.post(url, json=body, timeout=TIMEOUT) as r:
+                data = await r.json(content_type=None)
+            if data.get("result") == "ok":
+                return data
+            if data.get("result") == "fail" and data.get("error") == "set token error.":
                 continue
-            raise YeediApiError(f"loginByItToken failed: {step3}")
-        else:
-            raise YeediApiError(f"loginByItToken: failed to login with token after 3 tries")
+            raise YeediApiError(f"loginByItToken failed: {data}")
+        raise YeediApiError("loginByItToken: failed to login with token after 3 tries")
 
-        validity_ms = int(step3.get("last", 604800000))
+    # ----- device verification flow (1013 recovery) ------------------------
+
+    async def _fetch_verify_public_key(self, country: str) -> str:
+        """GET common/getConfig?keys=PUBLIC.KEY.CONFIG -> base64 public key.
+
+        The response value is itself a JSON-encoded string containing
+        {"publicKey": "<base64>"}; we parse the outer list and the inner JSON.
+        """
+        country_lower = country.lower()
+        url = (
+            f"{AUTH_GL_API.format(country=country_lower)}"
+            f"/v1/private/{country_lower}/EN/{self._device_id}/{APP_CODE}"
+            f"/{VERIFY_APP_VERSION}/{CHANNEL}/{DEVICE_TYPE}/{VERIFY_GETCONFIG_PATH}"
+        )
+        now_ms = int(time.time() * 1000)
+        params = {
+            "keys": VERIFY_PUBLIC_KEY_CONFIG_KEY,
+            "requestId": self._request_id(),
+            "authTimespan": now_ms,
+            "authTimeZone": "GMT-8",
+        }
+        meta = self._verify_meta(country.upper())
+        sign_params = {**meta, **params}
+        query = self._build_query(
+            params, sign_params,
+            AUTH_USERLOGIN_AUTH_APPKEY_YD, AUTH_USERLOGIN_SECRET_YD,
+        )
+        async with self._session.get(url, params=query, timeout=TIMEOUT) as r:
+            data = await r.json(content_type=None)
+        # Outer: list of {"key": "...", "value": "<json-string>"}
+        entry = next(
+            (e for e in data if isinstance(e, dict) and e.get("key") == VERIFY_PUBLIC_KEY_CONFIG_KEY),
+            None,
+        )
+        if entry is None or "value" not in entry:
+            raise YeediApiError(f"getConfig missing {VERIFY_PUBLIC_KEY_CONFIG_KEY}: {data}")
+        # Value is itself a JSON-encoded string with publicKey inside.
+        inner = entry["value"]
+        if isinstance(inner, str):
+            import json as _json
+            inner = _json.loads(inner)
+        if "publicKey" not in inner:
+            raise YeediApiError(f"verify public key missing: {inner}")
+        return inner["publicKey"]
+
+    @staticmethod
+    def _rsa_encrypt_base64(text: str, public_key_b64: str) -> str:
+        """RSA-PKCS1v15 encrypt text with a base64 SPKI public key, return base64."""
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import padding, rsa
+        der = base64.b64decode(public_key_b64)
+        pub = serialization.load_der_public_key(der)
+        assert isinstance(pub, rsa.RSAPublicKey), "expected RSA public key"
+        ciphertext = pub.encrypt(text.encode("utf-8"), padding.PKCS1v15())
+        return base64.b64encode(ciphertext).decode("ascii")
+
+    async def request_device_verification_code(
+        self, email: str, country: str
+    ) -> None:
+        """Send the verification code to the user's email. (Step 1 of recovery.)"""
+        country_lower = country.lower()
+        url = (
+            f"{AUTH_GL_API.format(country=country_lower)}"
+            f"/v1/private/{country_lower}/EN/{self._device_id}/{APP_CODE}"
+            f"/{VERIFY_APP_VERSION}/{CHANNEL}/{DEVICE_TYPE}/{VERIFY_SENDEMAIL_PATH}"
+        )
+        public_key = await self._fetch_verify_public_key(country)
+        encrypt_email = self._rsa_encrypt_base64(email, public_key)
+        now_ms = int(time.time() * 1000)
+        params = {
+            "encryptEmail": encrypt_email,
+            "verifyType": "EMAIL_VERIFY_DEVICE",
+            "supportChar": "N",
+            "isForce": "N",
+            "requestId": self._request_id(),
+            "authTimespan": now_ms,
+            "authTimeZone": "GMT-8",
+        }
+        meta = self._verify_meta(country.upper())
+        sign_params = {**meta, **params}
+        query = self._build_query(
+            params, sign_params,
+            AUTH_USERLOGIN_AUTH_APPKEY_YD, AUTH_USERLOGIN_SECRET_YD,
+        )
+        async with self._session.get(url, params=query, timeout=TIMEOUT) as r:
+            data = await r.json(content_type=None)
+        if not isinstance(data, dict) or data.get("code") != "0000":
+            raise YeediApiError(f"sendEmailVerifyCode failed: {data}")
+
+    async def verify_device(
+        self, email: str, code: str, country: str
+    ) -> dict[str, Any]:
+        """Confirm the emailed code. Returns {uid, accessToken} (Step 2 of recovery)."""
+        country_lower = country.lower()
+        url = (
+            f"{AUTH_GL_API.format(country=country_lower)}"
+            f"/v1/private/{country_lower}/EN/{self._device_id}/{APP_CODE}"
+            f"/{VERIFY_APP_VERSION}/{CHANNEL}/{DEVICE_TYPE}/{VERIFY_DEVICE_PATH}"
+        )
+        public_key = await self._fetch_verify_public_key(country)
+        encrypt_account = self._rsa_encrypt_base64(email, public_key)
+        now_ms = int(time.time() * 1000)
+        params = {
+            "encryptAccount": encrypt_account,
+            "backUpEmail": "",
+            "verifyCode": code.strip(),
+            "model": "HA-Integration",
+            "system": "HomeAssistant",
+            "requestId": self._request_id(),
+            "authTimespan": now_ms,
+            "authTimeZone": "GMT-8",
+        }
+        meta = self._verify_meta(country.upper())
+        sign_params = {**meta, **params}
+        query = self._build_query(
+            params, sign_params,
+            AUTH_USERLOGIN_AUTH_APPKEY_YD, AUTH_USERLOGIN_SECRET_YD,
+        )
+        async with self._session.get(url, params=query, timeout=TIMEOUT) as r:
+            data = await r.json(content_type=None)
+        if not isinstance(data, dict) or "uid" not in data or "accessToken" not in data:
+            raise YeediApiError(f"verifyDevice missing fields: {data}")
+        return data
+
+    # ----- top-level login flow --------------------------------------------
+
+    async def async_login(
+        self, email: str, password: str, country: str
+    ) -> tuple[Auth, list[Device]]:
+        """3-step login + device discovery. Caches auth on the client.
+
+        On 1013 (DeviceVerificationRequired), the config flow must catch that,
+        ask the user for the emailed code, call request_device_verification_code,
+        then verify_device, then complete_login.
+        """
+        self._continent = COUNTRY_TO_CONTINENT.get(country.upper(), "ww")
+        country_upper = country.upper()
+        org = "ECOYDCN" if country_upper == "CN" else "ECOYDWW"
+
+        pw_hash = hashlib.md5(password.encode("utf-8")).hexdigest()
+
+        try:
+            step1 = await self._user_login_get(email, pw_hash, country)
+            uid = step1["uid"]
+            login_token = step1["accessToken"]
+        except DeviceVerificationRequired as e:
+            # Re-raise so config flow can drive the email verification.
+            raise
+
+        auth = await self.complete_login(uid, login_token, org, country_upper)
+        devices = await self._async_get_devices()
+        return auth, devices
+
+    async def complete_login(
+        self, uid: str, login_token: str, org: str, country: str
+    ) -> Auth:
+        """Run steps 2 + 3 given a known uid+accessToken, return cached Auth."""
+        country_upper = country.upper()
+        auth_code = await self._get_auth_code_get(uid, login_token, country)
+        step3 = await self._login_by_it_token_post(
+            uid, auth_code, org, country_upper
+        )
+        validity_ms = int(step3.get("last") or 604800000)
         expires_at = time.time() + (validity_ms / 1000) * 0.99
-        final_uid = step3.get("userId", uid)
-
+        final_uid = step3.get("userId") or uid
         self._auth = Auth(
             user_id=final_uid,
             user_access_token=step3["token"],
@@ -204,10 +476,7 @@ class YeediClient:
             org=org,
             country=country_upper,
         )
-
-        # Step 4: getDeviceList
-        devices = await self._async_get_devices()
-        return self._auth, devices
+        return self._auth
 
     async def async_send_command(
         self,
