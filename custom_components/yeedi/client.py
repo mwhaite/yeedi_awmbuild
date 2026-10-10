@@ -178,6 +178,18 @@ class YeediClient:
             "deviceType": DEVICE_TYPE,
         }
 
+    def _sign_meta(self, country_upper: str) -> dict[str, str]:
+        """Meta used INSIDE the authSign computation.
+
+        For `user/login` (and the device-verification endpoints), the country
+        value in the sign is **lowercase** while the path uses lowercase too.
+        Probing the live API confirmed: signing with country=US yields
+        ``0002 Parameter error``; signing with country=us yields ``0000``.
+        """
+        m = self._meta(country_upper)
+        m["country"] = country_upper.lower()
+        return m
+
     def _verify_meta(self, country_upper: str) -> dict[str, str]:
         """Same as _meta but with country lowercased and the verify appVersion.
 
@@ -237,7 +249,9 @@ class YeediClient:
             "authTimespan": now_ms,
             "authTimeZone": "GMT-8",
         }
-        meta = self._meta(country.upper())
+        # CRITICAL: sign with country LOWERCASE. Live API returns 0002 with
+        # uppercase, 0000 with lowercase. The path segment stays lowercase too.
+        meta = self._sign_meta(country.upper())
         sign_params = {**meta, **params}
         query = self._build_query(
             params, sign_params,
@@ -245,13 +259,20 @@ class YeediClient:
         )
         async with self._session.get(url, params=query, timeout=TIMEOUT) as r:
             data = await r.json(content_type=None)
-        if isinstance(data, dict) and data.get("code") == 1013:
-            raise DeviceVerificationRequired(
-                f"user/login returned 1013: {data.get('msg')}"
-            )
-        if not isinstance(data, dict) or "uid" not in data or "accessToken" not in data:
-            raise YeediApiError(f"user/login missing fields: {data}")
-        return data
+        # Response is wrapped: {"code":"0000", "data":{uid, accessToken, ...}}
+        # Errors come as {"code":"1013", "msg": "..."} with no `data` key.
+        if isinstance(data, dict):
+            code = data.get("code")
+            if code == 1013 or code == "1013":
+                raise DeviceVerificationRequired(
+                    f"user/login returned 1013: {data.get('msg')}"
+                )
+            if code and code != "0000" and code != 0:
+                raise YeediApiError(f"user/login error {code}: {data.get('msg')}")
+            payload = data.get("data") if "data" in data else data
+            if isinstance(payload, dict) and "uid" in payload and "accessToken" in payload:
+                return payload
+        raise YeediApiError(f"user/login missing uid/accessToken: {data}")
 
     async def _get_auth_code_get(
         self, uid: str, access_token: str, country: str
@@ -273,9 +294,14 @@ class YeediClient:
         )
         async with self._session.get(url, params=query, timeout=TIMEOUT) as r:
             data = await r.json(content_type=None)
-        if not isinstance(data, dict) or "authCode" not in data:
-            raise YeediApiError(f"getAuthCode missing authCode: {data}")
-        return data["authCode"]
+        if isinstance(data, dict):
+            payload = data.get("data") if "data" in data else data
+            if isinstance(payload, dict) and "authCode" in payload:
+                return payload["authCode"]
+            if isinstance(payload, str) and payload:
+                # Some paths return authCode at top level when there's no envelope
+                return payload
+        raise YeediApiError(f"getAuthCode missing authCode: {data}")
 
     async def _login_by_it_token_post(
         self, uid: str, auth_code: str, org: str, country_upper: str
@@ -424,9 +450,13 @@ class YeediClient:
         )
         async with self._session.get(url, params=query, timeout=TIMEOUT) as r:
             data = await r.json(content_type=None)
-        if not isinstance(data, dict) or "uid" not in data or "accessToken" not in data:
-            raise YeediApiError(f"verifyDevice missing fields: {data}")
-        return data
+        if isinstance(data, dict):
+            payload = data.get("data") if "data" in data else data
+            if isinstance(payload, dict) and "uid" in payload and "accessToken" in payload:
+                return payload
+            if "uid" in data and "accessToken" in data:
+                return data
+        raise YeediApiError(f"verifyDevice missing fields: {data}")
 
     # ----- top-level login flow --------------------------------------------
 
