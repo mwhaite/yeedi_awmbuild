@@ -167,14 +167,22 @@ async def test_client_login_happy_path():
     # Step 2 was a GET to the openapi URL.
     step2_url = session.get.call_args_list[1].args[0]
     assert AUTH_GL_OPENAPI.format(country="at") in step2_url
-    # Step 3 was a POST to the EU portal.
+    # Step 3 was a POST to the EU portal users/user.do.
     step3_url = session.post.call_args_list[0].args[0]
     assert step3_url.startswith(CONTINENT_TO_HOST["eu"])
+    assert step3_url.endswith("/users/user.do")
     # deviceId flowed into Step 1 URL path and Step 2 query string.
     step1_url = session.get.call_args_list[0].args[0]
     assert "ha-abcdef012345" in step1_url  # in path segment
     step2_query = session.get.call_args_list[1].kwargs["params"]
     assert step2_query["deviceId"] == "ha-abcdef012345"
+    # GetDeviceList (the 4th call) is a POST to users/user.do, NOT iot/devmanager.do.
+    devlist_url = session.post.call_args_list[1].args[0]
+    assert devlist_url.endswith("/users/user.do")
+    assert "/iot/" not in devlist_url
+    devlist_body = session.post.call_args_list[1].kwargs["json"]
+    assert devlist_body["todo"] == "GetDeviceList"
+    assert devlist_body["auth"]["token"] == "long-token"
 
 
 @pytest.mark.asyncio

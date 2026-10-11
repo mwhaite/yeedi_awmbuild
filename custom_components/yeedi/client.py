@@ -621,9 +621,16 @@ class YeediClient:
         }
 
     async def _async_get_devices(self) -> list[Device]:
+        """Discover devices bound to the account.
+
+        GetDeviceList is a USER-level query, not a device-level command —
+        it goes to ``users/user.do``, not ``iot/devmanager.do``. Confirmed
+        from the bmartin5692/sucks protocol.md (POST users/user.do
+        GetDeviceList, separate from iot/devmanager.do command path).
+        """
         assert self._auth is not None
         portal_base = CONTINENT_TO_HOST[self._continent]
-        url = f"{portal_base}/iot/devmanager.do"
+        url = f"{portal_base}/users/user.do"
         body = {
             "todo": "GetDeviceList",
             "auth": self._auth_block(),
