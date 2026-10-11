@@ -66,9 +66,12 @@ COUNTRY_TO_CONTINENT = {
     "CN": "cn",
 }
 CONTINENT_TO_HOST = {
-    "eu": "https://api-app.dc-eu.ww.ecouser.net/api",
-    "na": "https://api-app.dc-na.ww.ecouser.net/api",
-    "sa": "https://api-app.dc-sa.ww.ecouser.net/api",
+    # Legacy portal hosts (used by callPortalApi for users/user.do and
+    # appsvr/app.do — confirmed from mrbungle64/ecovacs-deebot.js
+    # getPortalUrlFormat: non-CN countries use portal-{continent}.ecouser.net).
+    "eu": "https://portal-eu.ecouser.net/api",
+    "na": "https://portal-na.ecouser.net/api",
+    "sa": "https://portal-sa.ecouser.net/api",
     "ww": "https://portal-ww.ecouser.net/api",
     "cn": "https://portal.ecouser.net/api",
 }
@@ -647,10 +650,10 @@ class YeediClient:
         if data.get("result") != "ok":
             raise YeediApiError(f"GetDeviceList failed: {data}")
 
+        # Response is at the top level: {"result":"ok", "devices":[{did, ...}, ...]}
+        # (per ecovacs-deebot.js getDevices() which returns data['devices']).
         devices: list[Device] = []
-        items = data.get("data") or data.get("devices") or []
-        if isinstance(items, dict):
-            items = list(items.values())
+        items = data.get("devices") or []
         for d in items:
             devices.append(
                 Device(

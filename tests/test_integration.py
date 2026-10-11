@@ -135,7 +135,7 @@ async def test_client_login_happy_path():
     ])
     session.post = MagicMock(side_effect=[
         make_response({"result": "ok", "token": "long-token", "userId": "uid-123", "last": 604800000}),  # loginByItToken
-        make_response({"result": "ok", "data": [{"did": "did-A", "deviceClass": "vacuum",
+        make_response({"result": "ok", "devices": [{"did": "did-A", "deviceClass": "vacuum",
                                                   "deviceModel": "yeedi 2 hybrid",
                                                   "deviceName": "Tomschin", "resource": "did-A"}]}),  # GetDeviceList
     ])
@@ -183,7 +183,9 @@ async def test_client_login_happy_path():
     devlist_body = session.post.call_args_list[1].kwargs["json"]
     assert devlist_body["todo"] == "GetDeviceList"
     assert devlist_body["auth"]["token"] == "long-token"
-
+    # The first device in the mocked response is parsed from a top-level
+    # "devices" list (not a "data" envelope).
+    assert devices[0].device_name == "Tomschin"
 
 @pytest.mark.asyncio
 async def test_client_login_bad_credentials_step1():
@@ -253,7 +255,7 @@ async def test_client_verify_device_flow():
     ])
     session.post = MagicMock(side_effect=[
         make_response({"result": "ok", "token": "long", "userId": "u-new", "last": 604800000}),  # loginByItToken
-        make_response({"result": "ok", "data": []}),  # GetDeviceList
+        make_response({"result": "ok", "devices": []}),  # GetDeviceList
     ])
 
     client = YeediClient(session, device_id="ha-1234567890ab")
