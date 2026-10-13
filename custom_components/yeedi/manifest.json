@@ -1,13 +1,13 @@
 {
   "domain": "yeedi",
   "name": "Yeedi",
-  "version": "0.1.0",
+  "codeowners": ["@custom-components"],
   "config_flow": true,
-  "documentation": "https://forgejo.tail018ac4.ts.net/Mark/yeedi_awmbuild",
-  "issue_tracker": "https://forgejo.tail018ac4.ts.net/Mark/yeedi_awmbuild/issues",
-  "homeassistant": "2025.1.0",
-  "requirements": ["cryptography>=42.0.0"],
   "dependencies": [],
-  "codeowners": ["@Mark"],
-  "iot_class": "cloud_polling"
+  "documentation": "https://github.com/custom-components/yeedi",
+  "integration_type": "hub",
+  "iot_class": "cloud_push",
+  "loggers": ["yeedi"],
+  "requirements": ["deebot-client>=10.0.0", "svg.py<1.7"],
+  "version": "1.0.0"
 }

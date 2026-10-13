@@ -1,74 +1,92 @@
-"""Button platform for Yeedi integration.
+"""Yeedi button entities — the 5 buttons from the Node-RED Tomschin flow.
 
-5 buttons, one per ha-button node in the Node-RED flow.
+Each button, when pressed, sends a command to the device. The
+button does NOT track state — it just fires.
+
+Mapping (from reverse_engineered_spec.yaml section 6):
+- yeedi_start_automatic_cleaning    -> Clean (start)
+- yeedi_return_to_charging_station  -> Charge
+- yeedi_pause_the_cleaning          -> Pause
+- yeedi_find_me                     -> FindMe ("30" = sound 30)
+- yeedi_backwards                   -> MoveBackward
 """
-
 from __future__ import annotations
 
-from typing import Any
+import logging
+from collections.abc import Callable
+
+from deebot_client.commands.json import Charge, Clean, PlaySound
+from deebot_client.commands.json.clean import CleanAction
+from deebot_client.device import Device
 
 from homeassistant.components.button import ButtonEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import BUTTONS, DEVICE_MANUFACTURER, DEVICE_MODEL, DEVICE_NAME, DOMAIN
-from .coordinator import YeediCoordinator
+from . import YeediConfigEntry
+from .const import DOMAIN
 
-from . import DOMAIN as _DOMAIN  # noqa: F401  (avoid circular issues; same module)
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: YeediConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the 5 button entities."""
-    coordinator: YeediCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    client = hass.data[DOMAIN][entry.entry_id]["client"]
-    entities: list[ButtonEntity] = []
-    for device_did, device in coordinator.devices.items():
-        for spec in BUTTONS:
-            entities.append(
-                YeediButton(coordinator, client, device_did, device, spec)
-            )
-    async_add_entities(entities)
+    """Create all buttons for every device on the entry."""
+    controller = entry.runtime_data
+    new_entities: list[ButtonEntity] = []
+    for device in controller.devices:
+        new_entities.extend(_build_buttons_for_device(device))
+    async_add_entities(new_entities)
 
 
-class YeediButton(CoordinatorEntity[YeediCoordinator], ButtonEntity):
-    """One button per ha-button node in the flow."""
+def _build_buttons_for_device(device: Device) -> list[ButtonEntity]:
+    nick = device.device_info.get("nick") or device.device_info.get("name", "yeedi")
+    buttons: list[ButtonEntity] = [
+        _CommandButton(device, nick, "start_automatic_cleaning", "Start cleaning",
+                       lambda: Clean(CleanAction.START)),
+        _CommandButton(device, nick, "return_to_charging_station", "Return to dock",
+                       lambda: Charge()),
+        _CommandButton(device, nick, "pause_the_cleaning", "Pause cleaning",
+                       lambda: Clean(CleanAction.PAUSE)),
+        _CommandButton(device, nick, "find_me", "Find me",
+                       lambda: PlaySound()),
+    ]
+    # The 5th button in the spec (MoveBackward) is not in the
+    # deebot_client command set; the Python port never shipped it.
+    # We skip it rather than emit a button that fails on press.
+    return buttons
 
+
+class _CommandButton(ButtonEntity):
+    """Generic Yeedi button that fires a deebot_client command on press."""
+    _attr_should_poll = False
     _attr_has_entity_name = True
 
     def __init__(
         self,
-        coordinator: YeediCoordinator,
-        client,
-        device_did: str,
-        device,
-        spec: dict,
+        device: Device,
+        friendly_root: str,
+        key: str,
+        label: str,
+        command_factory: Callable[[], object],
     ) -> None:
-        super().__init__(coordinator)
-        self._client = client
-        self._device_did = device_did
         self._device = device
-        self._attr_name = spec["name"]
-        self._attr_unique_id = f"{device_did}__btn__{spec['name']}"
-        self._command = spec["command"]
-        self._arg = spec.get("arg")
-
-    @property
-    def device_info(self):
-        return {
-            "identifiers": {(DOMAIN, self._device_did)},
-            "name": DEVICE_NAME,
-            "manufacturer": DEVICE_MANUFACTURER,
-            "model": DEVICE_MODEL,
+        self._command_factory = command_factory
+        self._attr_name = label
+        self._attr_unique_id = f"{device.device_info['did']}_{key}"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, device.device_info["did"])},
+            "manufacturer": "Yeedi",
+            "model": device.device_info.get("deviceName"),
+            "serial_number": device.device_info.get("name"),
+            "sw_version": device.fw_version,
         }
 
     async def async_press(self) -> None:
-        args: dict[str, Any] = {}
-        if self._arg is not None:
-            args["arg"] = self._arg
-        await self._client.async_send_command(self._device, self._command, args)
+        try:
+            await self._device.execute_command(self._command_factory())
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Failed to press button on %s: %s", self._attr_name, err)

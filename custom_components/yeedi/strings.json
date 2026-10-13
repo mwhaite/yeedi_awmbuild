@@ -1,0 +1,44 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "data": {
+          "mode": "Mode"
+        },
+        "description": "Select the installation mode.",
+        "title": "Set up Yeedi"
+      },
+      "auth": {
+        "data": {
+          "username": "Email",
+          "password": "Password",
+          "country": "Country",
+          "override_rest_url": "Override REST URL",
+          "override_mqtt_url": "Override MQTT URL",
+          "verify_mqtt_certificate": "Verify MQTT certificate",
+          "client_secret": "Login API client secret",
+          "auth_client_secret": "Auth-code API client secret"
+        },
+        "description": "Sign in with your Yeedi account. Optionally provide API client secrets (obtainable from the Yeedi JS library) if they have been rotated.",
+        "title": "Authentication"
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect, please try again",
+      "invalid_auth": "Invalid authentication",
+      "invalid_url": "Invalid URL",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "Account is already configured"
+    }
+  },
+  "selector": {
+    "installation_mode": {
+      "options": {
+        "cloud": "Cloud (default)",
+        "self_hosted": "Self-hosted"
+      }
+    }
+  }
+}

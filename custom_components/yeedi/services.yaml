@@ -1,0 +1,19 @@
+custom_command:
+  name: Custom command
+  description: Send a custom command to the Yeedi vacuum.
+  fields:
+    command:
+      name: Command
+      description: The command to send.
+      example: Clean
+      selector:
+        text:
+    params:
+      name: Parameters
+      description: Optional parameters for the command.
+      example: '{"type": "auto", "act": "s"}'
+      selector:
+        object:
+  target:
+    entity:
+      domain: vacuum

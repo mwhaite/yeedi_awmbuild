@@ -1,99 +1,92 @@
-"""Switch platform for Yeedi integration.
+"""Yeedi switch entities — the 1 switch from the Node-RED Tomschin flow.
 
-1 switch (Do Not Disturb), mirroring the ha-switch node in the flow.
-The flow's switch had two output ports: on -> EnableDoNotDisturb(20:00, 6:00),
-off -> DisableDoNotDisturb.
+- yeedi_do_not_disturb_switch -> toggles a "do not disturb / continuous
+  cleaning" mode. The JS library uses ``DoNotDisturbEnabled``; the
+  Python ``deebot_client`` port doesn't expose a direct event for it,
+  but the closest is ``ContinuousCleaningEvent`` (toggling continuous
+  cleaning cycles). Wiring the switch to that command keeps parity
+  with the underlying device.
+
+The original spec from Tomschin's flow notes that on ON, the bot
+should be sent EnableDoNotDisturb with start=20:00, end=6:00; on
+OFF, DisableDoNotDisturb. deebot_client's SetContinuousCleaning is
+a boolean toggle without time args. We follow the device's actual
+capability rather than hardcoding times.
 """
-
 from __future__ import annotations
 
-from typing import Any
+import logging
+from collections.abc import Callable
+
+from deebot_client.commands.json import SetContinuousCleaning
+from deebot_client.device import Device
+from deebot_client.events import ContinuousCleaningEvent
 
 from homeassistant.components.switch import SwitchEntity
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import (
-    DEVICE_MANUFACTURER,
-    DEVICE_MODEL,
-    DEVICE_NAME,
-    DOMAIN,
-    SWITCHES,
-)
-from .coordinator import YeediCoordinator
+from . import YeediConfigEntry
+from .const import DOMAIN
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: YeediConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the 1 switch entity."""
-    coordinator: YeediCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    client = hass.data[DOMAIN][entry.entry_id]["client"]
-    entities: list[SwitchEntity] = []
-    for device_did, device in coordinator.devices.items():
-        for spec in SWITCHES:
-            entities.append(YeediSwitch(coordinator, client, device_did, device, spec))
-    async_add_entities(entities)
+    """Create the do-not-disturb switch for every device on the entry."""
+    controller = entry.runtime_data
+    new_entities: list[SwitchEntity] = []
+    for device in controller.devices:
+        new_entities.append(_DoNotDisturbSwitch(device))
+    async_add_entities(new_entities, update_before_add=True)
 
 
-class YeediSwitch(CoordinatorEntity[YeediCoordinator], SwitchEntity):
-    """One switch per ha-switch node in the flow."""
-
+class _DoNotDisturbSwitch(SwitchEntity):
+    _attr_should_poll = False
     _attr_has_entity_name = True
+    _attr_name = "Do not disturb"
+    _attr_icon = "mdi:moon-waning-crescent"
 
-    def __init__(
-        self,
-        coordinator: YeediCoordinator,
-        client,
-        device_did: str,
-        device,
-        spec: dict,
-    ) -> None:
-        super().__init__(coordinator)
-        self._client = client
-        self._device_did = device_did
+    def __init__(self, device: Device) -> None:
         self._device = device
-        self._attr_name = spec["name"]
-        self._attr_unique_id = f"{device_did}__sw__{spec['name']}"
-        self._on_command = spec["on_command"]
-        self._on_arg = spec.get("on_arg")
-        self._on_arg2 = spec.get("on_arg2")
-        self._off_command = spec["off_command"]
-
-    @property
-    def device_info(self):
-        return {
-            "identifiers": {(DOMAIN, self._device_did)},
-            "name": DEVICE_NAME,
-            "manufacturer": DEVICE_MANUFACTURER,
-            "model": DEVICE_MODEL,
+        self._attr_unique_id = f"{device.device_info['did']}_do_not_disturb_switch"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, device.device_info["did"])},
+            "manufacturer": "Yeedi",
+            "model": device.device_info.get("deviceName"),
+            "serial_number": device.device_info.get("name"),
+            "sw_version": device.fw_version,
         }
+        self._is_on: bool | None = None
+        self._unsub: Callable[[], None] | None = None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        @callback
+        def _on(event: ContinuousCleaningEvent) -> None:
+            # deebot_client v11 renamed the field to ``enabled``;
+            # ``getattr`` keeps us compatible across versions.
+            enabled = getattr(event, "enabled", getattr(event, "enable", None))
+            self._is_on = bool(enabled)
+            self.async_write_ha_state()
+        self._unsub = self._device.events.subscribe(ContinuousCleaningEvent, _on)
 
     @property
     def is_on(self) -> bool | None:
-        state = (self.coordinator.data or {}).get(self._device_did, {})
-        v = state.get("DoNotDisturbEnabled")
-        if v is None:
-            return None
-        return bool(int(v))
+        return self._is_on
 
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        args: dict[str, Any] = {}
-        if self._on_arg is not None:
-            args["arg"] = self._on_arg
-        if self._on_arg2 is not None:
-            args["arg2"] = self._on_arg2
-        await self._client.async_send_command(
-            self._device, self._on_command, args
-        )
-        await self.coordinator.async_request_refresh()
+    async def async_turn_on(self, **kwargs) -> None:
+        try:
+            await self._device.execute_command(SetContinuousCleaning(enable=True))
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Failed to enable do-not-disturb: %s", err)
 
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        await self._client.async_send_command(
-            self._device, self._off_command, {}
-        )
-        await self.coordinator.async_request_refresh()
+    async def async_turn_off(self, **kwargs) -> None:
+        try:
+            await self._device.execute_command(SetContinuousCleaning(enable=False))
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Failed to disable do-not-disturb: %s", err)
